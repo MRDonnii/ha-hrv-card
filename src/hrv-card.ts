@@ -1,3 +1,5 @@
+const _hrvRebuiltCardKeys = new Set();
+
 class HRVCard extends HTMLElement {
   static getStubConfig(_hass, entities = []) {
     const entityIds = Array.isArray(entities)
@@ -8,6 +10,7 @@ class HRVCard extends HTMLElement {
     return {
       entities: {
         outdoor_temperature: findEntity(["outdoor", "outside", "ude", "udeluft"], "sensor.outdoor_temperature"),
+        room_temperature: findEntity(["room_temperature", "stuetemperatur", "indetemperatur", "hustemperatur", "room"], undefined),
         supply_temperature: findEntity(["supply", "indblaes", "indblæs", "tilluft"], "sensor.supply_temperature"),
         extract_temperature: findEntity(["extract", "udsug", "fraluft"], "sensor.extract_temperature"),
         exhaust_temperature: findEntity(["exhaust", "afkast", "afkastluft", "udblaes", "udblæs"], "sensor.exhaust_temperature"),
@@ -20,15 +23,27 @@ class HRVCard extends HTMLElement {
         fan2_rpm: findEntity(["ventilator_hastighed_fraluft", "fan1_speed", "fan1_rpm", "fan_1_rpm"], "sensor.dantherm_fan1_speed"),
         co2: findEntity(["co2_sensor", "co2", "carbon_dioxide"], undefined),
         filter_days: findEntity(["dage_til_filter_skift", "filterrestlevetid", "filter_days", "filter"], undefined),
-        alarm: findEntity(["aktiv_alarm_liste", "aktiv_alarm_antal", "alarm"], undefined)
+        alarm: findEntity(["aktiv_alarm_liste", "aktiv_alarm_antal", "alarm"], undefined),
+        afterheat_after: findEntity(["air_after_heating_coil", "afterheat_after", "luft_efter"], undefined),
+        afterheat_valve: findEntity(["valve_opening", "ventilaabning", "afterheat_valve"], undefined),
+        water_flow: findEntity(["flow_temperature", "fremloeb", "water_flow"], undefined),
+        water_return: findEntity(["return_temperature", "retur", "water_return"], undefined),
+        water_delta: findEntity(["water_delta_t", "vand_delta", "water_delta"], undefined),
+        air_quality: findEntity(["air_quality", "luftkvalitet"], undefined),
+        power: findEntity(["_power", "power_consumption", "stroemforbrug"], undefined),
+        heat_transfer: findEntity(["heat_transfer", "varmeoverfoersel"], undefined)
       },
       appearance: {
         animation: true,
+        fan_animation: true,
+        pipe_animation: true,
         show_labels: true,
         show_badges: true,
         show_temperatures: true,
         invert_heat_recovery: false,
-        compact: false
+        compact: false,
+        afterheat_coil_opacity: 60,
+        hide_afterheat_on_bypass: false
       },
       temperature_thresholds: {
         white: -10,
@@ -52,6 +67,48 @@ class HRVCard extends HTMLElement {
     this._hass = undefined;
     this._id = `hrv-${Math.random().toString(36).slice(2, 10)}`;
     this._lastRenderSignature = "";
+    this._animEpoch = Date.now();
+    this._resizeObserver = undefined;
+  }
+
+  connectedCallback() {
+    if (!this._resizeObserver && typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() => this._requestRebuildIfNeeded());
+      this._resizeObserver.observe(this);
+    }
+  }
+
+  disconnectedCallback() {
+    this._resizeObserver?.disconnect();
+    this._resizeObserver = undefined;
+  }
+
+  _cardIdentityKey() {
+    try {
+      return JSON.stringify(this._config?.entities || {});
+    } catch {
+      return "";
+    }
+  }
+
+  _requestRebuildIfNeeded() {
+    // Some third-party grid/layout views (e.g. custom:grid-layout) call getCardSize()
+    // once before the card is attached to the DOM, when getBoundingClientRect() still
+    // returns 0 and we fall back to an estimate. They never re-query it afterward, so
+    // an underestimated fallback permanently clips the allocated row height. Dispatching
+    // the standard "ll-rebuild" event once real measurements are available forces
+    // Lovelace to recreate the card and re-read getCardSize() with accurate numbers.
+    const key = this._cardIdentityKey();
+    if (!key || _hrvRebuiltCardKeys.has(key)) return;
+    _hrvRebuiltCardKeys.add(key);
+    this.dispatchEvent(new CustomEvent("ll-rebuild", { bubbles: true, composed: true }));
+  }
+
+  _phaseDelay(durationSeconds, offsetSeconds = 0) {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return "0s";
+    const elapsed = (Date.now() - this._animEpoch) / 1000 + offsetSeconds;
+    const phase = ((elapsed % durationSeconds) + durationSeconds) % durationSeconds;
+    return `${(-phase).toFixed(3)}s`;
   }
 
   setConfig(config) {
@@ -63,6 +120,8 @@ class HRVCard extends HTMLElement {
       entities: {},
       appearance: {
         animation: true,
+        fan_animation: true,
+        pipe_animation: true,
         show_labels: true,
         show_badges: true,
         show_temperatures: true,
@@ -87,11 +146,15 @@ class HRVCard extends HTMLElement {
       },
       appearance: {
         animation: true,
+        fan_animation: true,
+        pipe_animation: true,
         show_labels: true,
         show_badges: true,
         show_temperatures: true,
         invert_heat_recovery: false,
         compact: false,
+        afterheat_coil_opacity: 60,
+        hide_afterheat_on_bypass: false,
         ...(config.appearance || {})
       }
     };
@@ -112,7 +175,9 @@ class HRVCard extends HTMLElement {
     const height = Number.isFinite(measuredHeight) && measuredHeight > 0
       ? measuredHeight
       : this._cardHeightForWidth(this._currentCardWidth());
-    return Math.max(1, Math.ceil(height / 50));
+    // Small safety buffer: grid views that only read this once should err toward
+    // a slightly taller allocation rather than clipping the diagram.
+    return Math.max(1, Math.ceil((height + 12) / 50));
   }
 
   getGridOptions() {
@@ -152,20 +217,24 @@ class HRVCard extends HTMLElement {
     );
   }
 
+  _diagramHeight() {
+    return 332;
+  }
+
   _cardHeightForWidth(width) {
     const compact = this._config?.appearance?.compact === true;
-    const showBadges = this._config?.appearance?.show_badges !== false;
     const measuredWidth = Number.isFinite(width) && width > 0 ? width : compact ? 360 : 500;
     const horizontalPadding = compact ? 6 : 10;
     const verticalPadding = compact ? 10 : 18;
-    const svgHeight = Math.max(0, measuredWidth - horizontalPadding) * (292 / 620);
-    const badgesHeight = showBadges ? compact ? 48 : 54 : 0;
-    return verticalPadding + svgHeight + badgesHeight;
+    const innerWidth = Math.max(0, measuredWidth - horizontalPadding);
+    const svgHeight = innerWidth * (this._diagramHeight() / 620);
+    return verticalPadding + svgHeight;
   }
 
   _renderSignature() {
     const entityKeys = [
       "outdoor_temperature",
+      "room_temperature",
       "supply_temperature",
       "extract_temperature",
       "exhaust_temperature",
@@ -178,19 +247,33 @@ class HRVCard extends HTMLElement {
       "fan2_rpm",
       "co2",
       "filter_days",
-      "alarm"
+      "alarm",
+      "afterheat_after",
+      "afterheat_valve",
+      "water_flow",
+      "water_return",
+      "water_delta",
+      "air_quality",
+      "power",
+      "heat_transfer"
     ];
     const appearance = this._config?.appearance || {};
     const entities = this._config?.entities || {};
     const labels = this._config?.labels || {};
     const temperatureThresholds = this._config?.temperature_thresholds || {};
+    const rpmBucketKeys = new Set(["fan1_rpm", "fan2_rpm"]);
     const stateParts = entityKeys.map((key) => {
       const entityId = entities[key] || "";
       const entity = entityId && this._hass ? this._hass.states[entityId] : undefined;
+      let stateValue = entity?.state ?? "";
+      if (rpmBucketKeys.has(key)) {
+        const numeric = Number.parseFloat(stateValue);
+        if (Number.isFinite(numeric)) stateValue = String(Math.round(numeric / 20) * 20);
+      }
       return [
         key,
         entityId,
-        entity?.state ?? "",
+        stateValue,
         entity?.attributes?.unit_of_measurement ?? "",
         Array.isArray(entity?.attributes?.options) ? entity.attributes.options.join("|") : ""
       ].join(":");
@@ -253,9 +336,39 @@ class HRVCard extends HTMLElement {
     return `${value}${suffix}`;
   }
 
+  _compactModeLabel(rawState) {
+    const compactModeLabels = {
+      en: {
+        auto_or_scheduled: "Auto",
+        auto_or_boost: "Auto+Boost",
+        manual_1: "Manual 1",
+        manual_2: "Manual 2",
+        manual_3: "Manual 3",
+        fireplace: "Fireplace",
+        standby: "Standby"
+      },
+      da: {
+        auto_or_scheduled: "Auto",
+        auto_or_boost: "Auto+Boost",
+        manual_1: "Manuel 1",
+        manual_2: "Manuel 2",
+        manual_3: "Manuel 3",
+        fireplace: "Pejs",
+        standby: "Standby"
+      }
+    };
+    const normalized = rawState?.toString().trim().toLowerCase().replace(/[\s-]+/g, "_") || "";
+    return compactModeLabels[this._language()]?.[normalized];
+  }
+
   _formatDisplayState(key, suffix = "") {
     const entity = this._entity(key);
     if (!entity || entity.state === "unknown" || entity.state === "unavailable") return "—";
+
+    if (key === "mode") {
+      const compact = this._compactModeLabel(entity.state);
+      if (compact) return `${compact}${suffix}`;
+    }
 
     let formatted;
     if (typeof this._hass?.formatEntityState === "function") {
@@ -421,10 +534,88 @@ class HRVCard extends HTMLElement {
     return `${value.toFixed(0)} ${this._unit(key, "rpm")}`;
   }
 
+  _fanAnimationEnabled() {
+    const appearance = this._config?.appearance || {};
+    const value = appearance.fan_animation ?? appearance.animation;
+    return value !== false;
+  }
+
+  _pipeAnimationEnabled() {
+    const appearance = this._config?.appearance || {};
+    const value = appearance.pipe_animation ?? appearance.animation;
+    return value !== false;
+  }
+
+  _fanBadgeSvg(key, x, y, iconScale = 1.6) {
+    if (!this._entityId(key)) return "";
+    const value = this._number(key);
+    const spinning = this._fanAnimationEnabled() && Number.isFinite(value) && value > 0;
+    const ratio = Number.isFinite(value) ? Math.max(0, Math.min(1, value / 100)) : 0;
+    const durationSeconds = 2.6 - ratio * 2.15;
+    const duration = durationSeconds.toFixed(2);
+    return `
+            <g ${this._svgEntityAttrs(key)} tabindex="0" transform="translate(${x} ${y})">
+              <rect x="-24" y="-27" width="48" height="54" rx="9" class="fan-badge-box"></rect>
+              <g transform="translate(0 -9) scale(${iconScale})">
+                <g class="fan-icon" style="animation-duration: ${duration}s; animation-delay: ${this._phaseDelay(durationSeconds)}; animation-play-state: ${spinning ? "running" : "paused"};">
+                  <path class="fan-blade" d="M0 0 Q3.2 -3.4 0 -7.4 Q-3.2 -3.4 0 0 Z"></path>
+                  <path class="fan-blade" d="M0 0 Q3.2 -3.4 0 -7.4 Q-3.2 -3.4 0 0 Z" transform="rotate(120)"></path>
+                  <path class="fan-blade" d="M0 0 Q3.2 -3.4 0 -7.4 Q-3.2 -3.4 0 0 Z" transform="rotate(240)"></path>
+                  <circle class="fan-hub" r="1.6"></circle>
+                </g>
+              </g>
+              <text x="0" y="19" text-anchor="middle" class="inline-afterheat-value" style="font-size:9px;">${this._formatRpm(key)}</text>
+            </g>
+    `;
+  }
+
   _formatCo2() {
     const value = this._number("co2");
     if (value === undefined) return "—";
     return `${value.toFixed(0)} ${this._unit("co2", "ppm")}`;
+  }
+
+  _formatPower() {
+    const value = this._number("power");
+    if (value === undefined) return "—";
+    return `${value.toFixed(0)} ${this._unit("power", "W")}`;
+  }
+
+  _formatAirQuality() {
+    const state = this._state("air_quality");
+    if (state === undefined) return "—";
+    const normalized = state.toString().trim().toLowerCase();
+    const key = { good: "air_quality_good", moderate: "air_quality_moderate", poor: "air_quality_poor" }[normalized];
+    return key ? this._t(key) : this._humanizeState(state);
+  }
+
+  _formatHeatTransfer() {
+    const state = this._state("heat_transfer");
+    if (state === undefined) return "—";
+    const normalized = state.toString().trim().toLowerCase();
+    const key = {
+      inactive: "heat_transfer_inactive",
+      low: "heat_transfer_low",
+      normal: "heat_transfer_normal",
+      high: "heat_transfer_high"
+    }[normalized];
+    return key ? this._t(key) : this._humanizeState(state);
+  }
+
+  _formatDeltaT(key) {
+    const value = this._number(key);
+    if (value === undefined) return "—";
+    return `${Math.abs(value).toFixed(1)}${this._unit(key, "°C")}`;
+  }
+
+  _isAfterheatActive() {
+    const valve = this._number("afterheat_valve");
+    // Some controllers expose a stale/unsupported valve position.  A positive
+    // value is useful confirmation, but a reported 0 % must not hide an actual
+    // temperature lift across the coil.
+    if (Number.isFinite(valve) && valve > 0) return true;
+    const waterDelta = this._number("water_delta");
+    return Number.isFinite(waterDelta) && Math.abs(waterDelta) > .8;
   }
 
   _formatFilterDays() {
@@ -436,6 +627,50 @@ class HRVCard extends HTMLElement {
   _isFilterDue() {
     const value = this._number("filter_days");
     return value !== undefined && value <= 0;
+  }
+
+  _airQualityRing() {
+    const state = this._state("air_quality");
+    if (state === undefined) return undefined;
+    const normalized = state.toString().trim().toLowerCase();
+    if (normalized === "good") return { progress: 100, colorClass: "" };
+    if (normalized === "moderate") return { progress: 100, colorClass: "warn" };
+    if (normalized === "poor") return { progress: 100, colorClass: "danger" };
+    return undefined;
+  }
+
+  _filterRing() {
+    if (!this._entityId("filter_days")) return undefined;
+    return this._isFilterDue()
+      ? { progress: 20, colorClass: "danger" }
+      : { progress: 100, colorClass: "" };
+  }
+
+  _overallStatusRing() {
+    const alarm = this._entityId("alarm") && this._isAlarmActive();
+    const filterDue = this._entityId("filter_days") && this._isFilterDue();
+    return {
+      progress: 100,
+      colorClass: alarm || filterDue ? "danger" : ""
+    };
+  }
+
+  _levelRing() {
+    if (!this._entityId("level")) return undefined;
+    const state = this._state("level");
+    if (state === undefined) return undefined;
+    const progress = {
+      off: 8, level_1: 25, level_2: 50, level_3: 75, boost: 100
+    }[state.toString().trim().toLowerCase()];
+    return progress === undefined ? undefined : { progress, colorClass: "info" };
+  }
+
+  _powerRing() {
+    if (!this._entityId("power")) return undefined;
+    const value = this._number("power");
+    if (!Number.isFinite(value)) return undefined;
+    const progress = Math.max(4, Math.min(100, (value / 120) * 100));
+    return { progress, colorClass: "info" };
   }
 
   _isAlarmActive() {
@@ -457,6 +692,7 @@ class HRVCard extends HTMLElement {
       en: {
         airflow_diagram: "HRV airflow diagram",
         outdoor: "Outdoor",
+        room: "Room",
         supply: "Supply",
         extract: "Extract",
         exhaust: "Exhaust",
@@ -472,24 +708,47 @@ class HRVCard extends HTMLElement {
         optional_entities: "Optional entities",
         appearance: "Appearance",
         outdoor_temperature: "Outdoor temperature",
+        room_temperature: "Room temperature",
         supply_temperature: "Supply temperature",
         extract_temperature: "Extract temperature",
         exhaust_temperature: "Exhaust temperature",
         heat_recovery: "Heat recovery",
         invert_heat_recovery: "Invert heat recovery",
-        fan1_rpm: "Fan 1 RPM",
-        fan2_rpm: "Fan 2 RPM",
+        fan1_rpm: "Fan 1 speed",
+        fan2_rpm: "Fan 2 speed",
         animation: "Animation",
+        fan_animation: "Fan animation",
+        pipe_animation: "Pipe animation",
         show_labels: "Show labels",
         show_badges: "Show badges",
         show_temperatures: "Show temperatures",
         compact: "Compact",
         state_open: "Open",
-        state_closed: "Closed"
+        state_closed: "Closed",
+        afterheat: "Afterheat",
+        afterheat_short: "Heat",
+        recovery_short: "Exchanger",
+        afterheat_after: "After coil",
+        valve: "Valve",
+        water_flow: "Flow",
+        water_return: "Return",
+        water_delta: "Water ΔT",
+        air_quality: "Air quality",
+        power: "Power",
+        power_short: "Power",
+        air_quality_good: "Good",
+        air_quality_moderate: "Moderate",
+        air_quality_poor: "Poor",
+        heat_transfer: "Heat transfer",
+        heat_transfer_inactive: "None",
+        heat_transfer_low: "Low",
+        heat_transfer_normal: "Normal",
+        heat_transfer_high: "High"
       },
       da: {
         airflow_diagram: "HRV luftstrømsdiagram",
         outdoor: "Ude",
+        room: "Hus",
         supply: "Indblæsning",
         extract: "Udsugning",
         exhaust: "Udblæs",
@@ -505,20 +764,42 @@ class HRVCard extends HTMLElement {
         optional_entities: "Valgfri enheder",
         appearance: "Udseende",
         outdoor_temperature: "Udetemperatur",
+        room_temperature: "Hustemperatur",
         supply_temperature: "Indblæsningstemperatur",
         extract_temperature: "Udsugningstemperatur",
         exhaust_temperature: "Udblæsningstemperatur",
         heat_recovery: "Varmegenvinding",
         invert_heat_recovery: "Omvend varmegenvinding",
-        fan1_rpm: "Ventilator 2 RPM",
-        fan2_rpm: "Ventilator 1 RPM",
+        fan1_rpm: "Ventilator 2 hastighed",
+        fan2_rpm: "Ventilator 1 hastighed",
         animation: "Animation",
+        fan_animation: "Blæser-animation",
+        pipe_animation: "Rør-animation",
         show_labels: "Vis labels",
         show_badges: "Vis badges",
         show_temperatures: "Vis temperaturer",
         compact: "Kompakt",
         state_open: "Åben",
-        state_closed: "Lukket"
+        state_closed: "Lukket",
+        afterheat: "Eftervarme",
+        afterheat_short: "Varme",
+        recovery_short: "Veksler",
+        afterheat_after: "Luft efter",
+        valve: "Ventil",
+        water_flow: "Fremløb",
+        water_return: "Retur",
+        water_delta: "ΔT vand",
+        air_quality: "Luftkvalitet",
+        power: "Strømforbrug",
+        power_short: "Strøm",
+        air_quality_good: "God",
+        air_quality_moderate: "Moderat",
+        air_quality_poor: "Dårlig",
+        heat_transfer: "Varmeoverførsel",
+        heat_transfer_inactive: "Ingen",
+        heat_transfer_low: "Lav",
+        heat_transfer_normal: "Normal",
+        heat_transfer_high: "Høj"
       }
     };
     return translations[this._language()]?.[key] || translations.en[key] || key;
@@ -543,8 +824,8 @@ class HRVCard extends HTMLElement {
     return this._formatDisplayState("bypass");
   }
 
-  _temperatureColor(value) {
-    if (!Number.isFinite(value)) return "var(--secondary-text-color, currentColor)";
+  _temperatureChannels(value) {
+    if (!Number.isFinite(value)) return [136, 144, 153];
     const thresholds = this._temperatureThresholds();
     const stops = [
       { value: thresholds.white, color: [248, 252, 255] },
@@ -555,8 +836,8 @@ class HRVCard extends HTMLElement {
       { value: thresholds.red, color: [219, 68, 55] }
     ].sort((a, b) => a.value - b.value);
 
-    if (value <= stops[0].value) return this._rgb(stops[0].color);
-    if (value >= stops[stops.length - 1].value) return this._rgb(stops[stops.length - 1].color);
+    if (value <= stops[0].value) return stops[0].color;
+    if (value >= stops[stops.length - 1].value) return stops[stops.length - 1].color;
 
     for (let index = 0; index < stops.length - 1; index += 1) {
       const from = stops[index];
@@ -564,11 +845,22 @@ class HRVCard extends HTMLElement {
       if (value >= from.value && value <= to.value) {
         const span = Math.max(.1, to.value - from.value);
         const ratio = (value - from.value) / span;
-        return this._rgb(from.color.map((channel, channelIndex) => Math.round(channel + (to.color[channelIndex] - channel) * ratio)));
+        return from.color.map((channel, channelIndex) => Math.round(channel + (to.color[channelIndex] - channel) * ratio));
       }
     }
 
-    return this._rgb(stops[2].color);
+    return stops[2].color;
+  }
+
+  _temperatureColor(value) {
+    if (!Number.isFinite(value)) return "var(--secondary-text-color, currentColor)";
+    return this._rgb(this._temperatureChannels(value));
+  }
+
+  _contrastTextColor(value) {
+    const [r, g, b] = this._temperatureChannels(value);
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.6 ? "#14171c" : "#f5f7fa";
   }
 
   _temperatureThresholds() {
@@ -618,7 +910,7 @@ class HRVCard extends HTMLElement {
   }
 
   _flowDuration() {
-    if (this._config?.appearance?.animation === false) return "0s";
+    if (!this._pipeAnimationEnabled()) return "0s";
     const level = this._fanLevel();
     if (level === undefined) return "3.2s";
     if (level <= 0) return "0s";
@@ -647,15 +939,16 @@ class HRVCard extends HTMLElement {
       { offset: 0, width: 2.2, alpha: .72, dash: 18, gap: 78, flowDelay: -1.35, waveDelay: -2.2, wave: 3.8 },
       { offset: 12, width: 2.4, alpha: .78, dash: 24, gap: 120, flowDelay: -2.1, waveDelay: -1.4, wave: 3.4 }
     ];
+    const durationSeconds = Number.parseFloat(duration);
 
     return variants.map((variant) => `
               <g
                 class="air-band ${stopped ? "stopped" : ""}"
-                style="--air-wave:${variant.wave}px; animation-delay:${variant.waveDelay}s;"
+                style="--air-wave:${variant.wave}px; animation-delay:${this._phaseDelay(10.8, variant.waveDelay)};"
               >
                 <path
                   class="air-line ${stopped ? "stopped" : ""}"
-                style="--flow-duration:${duration}; --air-alpha:${variant.alpha}; --air-flow-delay:${variant.flowDelay}s; --air-flow-direction:${reverse ? 260 : -260};"
+                style="--flow-duration:${duration}; --air-alpha:${variant.alpha}; --air-flow-delay:${this._phaseDelay(durationSeconds, variant.flowDelay)}; --air-flow-direction:${reverse ? 260 : -260};"
                 stroke-width="${variant.width}"
                 stroke-dasharray="${variant.dash} ${variant.gap}"
                 transform="translate(0 ${variant.offset})"
@@ -669,15 +962,16 @@ class HRVCard extends HTMLElement {
       { offset: -6, width: 3.8, gap: 42, alpha: .82, flowDelay: 0, waveDelay: -.8, wave: 2.2 },
       { offset: 8, width: 4.2, gap: 54, alpha: .72, flowDelay: -1.7, waveDelay: -1.6, wave: 2.6 }
     ];
+    const durationSeconds = Number.parseFloat(duration);
 
     return variants.map((variant) => `
           <g
             class="air-band ${stopped ? "stopped" : ""}"
-            style="--air-wave:${variant.wave}px; animation-delay:${variant.waveDelay}s;"
+            style="--air-wave:${variant.wave}px; animation-delay:${this._phaseDelay(10.8, variant.waveDelay)};"
           >
             <path
               class="flow-particles ${stopped ? "stopped" : ""}"
-              style="--flow-duration:${duration}; --particle-alpha:${variant.alpha}; --air-flow-delay:${variant.flowDelay}s; --air-flow-direction:${reverse ? 260 : -260};"
+              style="--flow-duration:${duration}; --particle-alpha:${variant.alpha}; --air-flow-delay:${this._phaseDelay(durationSeconds, variant.flowDelay)}; --air-flow-direction:${reverse ? 260 : -260};"
               stroke-width="${variant.width}"
               stroke-dasharray="1 ${variant.gap}"
               transform="translate(0 ${variant.offset})"
@@ -730,47 +1024,118 @@ class HRVCard extends HTMLElement {
     return entityId ? `class="${className}" data-entity="${entityId}"` : (extraClass ? `class="${extraClass}"` : "");
   }
 
-  _statusCircle(entityKey, label, value, x, y = 254, valueClass = "") {
+  _statusCircle(entityKey, label, value, x, y = 286, valueClass = "", extraKey = undefined, extraValue = undefined, large = false, ring = undefined, valueFontSizeOverride = undefined) {
     if (!this._entityId(entityKey)) return "";
     const textClass = ["status-value", valueClass].filter(Boolean).join(" ");
+    const hasExtra = Boolean(extraKey && this._entityId(extraKey) && extraValue);
+    const r = large ? 40 : 32;
+    const ringR = large ? 37 : 29;
+    const circleClass = large ? "status-circle status-circle-large" : "status-circle";
+    const rimClass = large ? "status-circle-rim status-circle-rim-large" : "status-circle-rim";
+    const glossCx = large ? -11 : -9;
+    const glossCy = large ? -17 : -14;
+    const glossRx = large ? 20 : 16;
+    const glossRy = large ? 12 : 10;
+    const labelY = large ? (hasExtra ? -15 : -8) : (hasExtra ? -11 : -6);
+    const valueY = large ? (hasExtra ? 6 : 15) : (hasExtra ? 7 : 13);
+    const valueFontSize = valueFontSizeOverride || (large ? "17px" : "15px");
+    const extraY = large ? 23 : 21;
     return `
             <g ${this._svgEntityAttrs(entityKey)} tabindex="0" transform="translate(${x} ${y})">
-              <circle class="status-circle" cx="0" cy="0" r="28"></circle>
-              <text x="0" y="-5" text-anchor="middle" class="status-label">${this._escapeHtml(label)}</text>
-              <text x="0" y="11" text-anchor="middle" class="${textClass}">${this._escapeHtml(value)}</text>
+              <circle class="${circleClass}" cx="0" cy="0" r="${r}"></circle>
+              <ellipse class="status-circle-gloss" cx="${glossCx}" cy="${glossCy}" rx="${glossRx}" ry="${glossRy}"></ellipse>
+              ${ring ? `
+                <circle class="status-ring-bg" cx="0" cy="0" r="${ringR}"></circle>
+                <circle class="status-ring ${ring.colorClass || ""}" cx="0" cy="0" r="${ringR}" pathLength="100" stroke-dasharray="${ring.progress} 100" transform="rotate(-90 0 0)"></circle>
+              ` : ""}
+              <circle class="${rimClass}" cx="0" cy="0" r="${r}"></circle>
+              <text x="0" y="${labelY}" text-anchor="middle" class="status-label">${this._escapeHtml(label)}</text>
+              <text x="0" y="${valueY}" text-anchor="middle" class="${textClass}" style="font-size:${valueFontSize};">${this._escapeHtml(value)}</text>
+              ${hasExtra ? `
+                <g ${this._svgEntityAttrs(extraKey)} tabindex="0">
+                  <text x="0" y="${extraY}" text-anchor="middle" class="status-value" style="font-size:10px;">${this._escapeHtml(extraValue)}</text>
+                </g>
+              ` : ""}
             </g>
     `;
   }
 
-  _bypassStatusCircle(x, y = 254) {
+  _afterheatCircle(x, y = 46) {
+    const hasValve = Boolean(this._entityId("afterheat_valve"));
+    if (!hasValve) return "";
+    const valve = this._number("afterheat_valve");
+    const valveProgress = Number.isFinite(valve) ? Math.max(0, Math.min(100, valve)) : 0;
+    const valveText = Number.isFinite(valve) ? this._formatNumber("afterheat_valve", 0, "%") : "0%";
+    return `
+            <g tabindex="0" transform="translate(${x} ${y})">
+              <circle class="status-circle" cx="0" cy="0" r="32"></circle>
+              <ellipse class="status-circle-gloss" cx="-9" cy="-14" rx="16" ry="10"></ellipse>
+              <circle class="afterheat-ring-bg" cx="0" cy="0" r="29"></circle>
+              <circle class="afterheat-ring" cx="0" cy="0" r="29" pathLength="100" stroke-dasharray="${valveProgress} 100" transform="rotate(-90 0 0)"></circle>
+              <circle class="status-circle-rim" cx="0" cy="0" r="32"></circle>
+              <text x="0" y="-6" text-anchor="middle" class="status-label">${this._t("afterheat_short")}</text>
+              <g ${this._svgEntityAttrs("afterheat_valve")} tabindex="0">
+                <text x="0" y="13" text-anchor="middle" class="status-value">${valveText}</text>
+              </g>
+            </g>
+    `;
+  }
+
+  _bypassStatusCircle(x, y = 286) {
+    const open = this._isBypassOpen();
     return `
             <g ${this._svgEntityAttrs("bypass")} tabindex="0" transform="translate(${x} ${y})">
-              <circle class="status-circle" cx="0" cy="0" r="30"></circle>
-              <text x="0" y="-5" text-anchor="middle" class="status-label">${this._t("bypass")}</text>
-              <text x="0" y="11" text-anchor="middle" class="status-value">${this._formatBypassState()}</text>
+              <circle class="status-circle status-circle-large" cx="0" cy="0" r="40"></circle>
+              <ellipse class="status-circle-gloss" cx="-11" cy="-17" rx="20" ry="12"></ellipse>
+              <circle class="status-ring-bg" cx="0" cy="0" r="37"></circle>
+              <circle class="status-ring ${open ? "info" : ""}" cx="0" cy="0" r="37" pathLength="100" stroke-dasharray="100 100" transform="rotate(-90 0 0)"></circle>
+              <circle class="status-circle-rim status-circle-rim-large" cx="0" cy="0" r="40"></circle>
+              <text x="0" y="-8" text-anchor="middle" class="status-label">${this._t("bypass")}</text>
+              <text x="0" y="15" text-anchor="middle" class="status-value" style="font-size:15px;">${this._formatBypassState()}</text>
             </g>
     `;
   }
 
-  _auxStatusCircles(y = 254) {
-    const items = [
-      this._entityId("co2") ? (x) => this._statusCircle("co2", this._t("co2"), this._formatCo2(), x, y) : undefined,
-      (x) => this._bypassStatusCircle(x, y),
-      this._entityId("filter_days") ? (x) => this._statusCircle("filter_days", this._t("filter_days"), this._formatFilterDays(), x, y, this._isFilterDue() ? "danger blink-fade" : "") : undefined
-    ].filter(Boolean);
-    const positions = {
-      1: [310],
-      2: [270, 350],
-      3: [232, 310, 388]
-    }[items.length] || [310];
+  _driftLevelCircle(x, y = 286) {
+    if (!this._entityId("mode") && !this._entityId("level")) return "";
+    const ring = this._levelRing();
+    return `
+            <g tabindex="0" transform="translate(${x} ${y})">
+              <circle class="status-circle status-circle-large" cx="0" cy="0" r="40"></circle>
+              <ellipse class="status-circle-gloss" cx="-11" cy="-17" rx="20" ry="12"></ellipse>
+              ${ring ? `
+                <circle class="status-ring-bg" cx="0" cy="0" r="37"></circle>
+                <circle class="status-ring ${ring.colorClass}" cx="0" cy="0" r="37" pathLength="100" stroke-dasharray="${ring.progress} 100" transform="rotate(-90 0 0)"></circle>
+              ` : ""}
+              <circle class="status-circle-rim status-circle-rim-large" cx="0" cy="0" r="40"></circle>
+              ${this._entityId("mode") ? `
+                <g ${this._svgEntityAttrs("mode")} tabindex="0">
+                  <text x="0" y="-10" text-anchor="middle" class="status-label">${this._t("mode")}</text>
+                  <text x="0" y="6" text-anchor="middle" class="status-value" style="font-size:12px;">${this._formatSelectState("mode")}</text>
+                </g>
+              ` : ""}
+              ${this._entityId("level") ? `
+                <g ${this._svgEntityAttrs("level")} tabindex="0">
+                  <text x="0" y="23" text-anchor="middle" class="status-value" style="font-size:11px;">${this._formatSelectState("level")}</text>
+                </g>
+              ` : ""}
+            </g>
+    `;
+  }
 
-    return items.map((renderItem, index) => renderItem(positions[index])).join("");
+  _auxStatusCircles(x, y = 286) {
+    return `
+            ${this._entityId("power") ? this._statusCircle("power", this._t("power_short"), this._formatPower(), x - 168, y, "", undefined, undefined, false, this._powerRing(), "12px") : ""}
+            ${this._driftLevelCircle(x - 88, y)}
+            ${this._bypassStatusCircle(x, y)}
+            ${this._entityId("filter_days") ? this._statusCircle("filter_days", this._t("filter_days"), this._formatFilterDays(), x + 80, y, this._isFilterDue() ? "danger blink-fade" : "", undefined, undefined, false, this._filterRing()) : ""}
+    `;
   }
 
   _alarmIndicator() {
     if (!this._entityId("alarm") || !this._isAlarmActive()) return "";
     return `
-            <g ${this._svgEntityAttrs("alarm", "blink-fade")} tabindex="0" transform="translate(456 254)">
+            <g ${this._svgEntityAttrs("alarm", "blink-fade")} tabindex="0" transform="translate(478 286)">
               <path class="alarm-triangle" d="M0 -18 L20 17 H-20 Z"></path>
               <text x="0" y="10" text-anchor="middle" class="alarm-mark">!</text>
             </g>
@@ -785,6 +1150,56 @@ class HRVCard extends HTMLElement {
     }));
   }
 
+  _hasAfterheat() {
+    return Boolean(
+      this._entityId("afterheat_after") ||
+      this._entityId("water_flow") ||
+      this._entityId("water_return")
+    );
+  }
+
+  _inlineAfterheatSvg(x, y) {
+    if (!this._hasAfterheat()) return "";
+
+    const active = this._isAfterheatActive();
+    const hasFlow = Boolean(this._entityId("water_flow"));
+    const hasReturn = Boolean(this._entityId("water_return"));
+    const hasDelta = Boolean(this._entityId("water_delta"));
+    const hasWater = hasFlow || hasReturn;
+
+    return `
+      <g class="inline-afterheat" transform="translate(${x} ${y})">
+        <rect x="-48" y="-33" width="96" height="66" rx="12" class="afterheat-coil-glow ${active ? "active" : ""}"></rect>
+        <rect x="-42" y="-27" width="84" height="54" rx="9" fill="#808080" class="afterheat-coil ${active ? "active" : ""}"></rect>
+        ${hasWater ? `
+          <rect x="-38" y="-23" width="36" height="46" rx="5" class="afterheat-warm-side"></rect>
+          <rect x="2" y="-23" width="36" height="46" rx="5" class="afterheat-cool-side"></rect>
+          ${hasFlow ? `
+            <g ${this._svgEntityAttrs("water_flow")} tabindex="0">
+              <text x="-20" y="8" text-anchor="middle" class="inline-afterheat-value" style="font-size:9.5px;">${this._formatTemp("water_flow")}</text>
+            </g>
+          ` : ""}
+          ${hasReturn ? `
+            <g ${this._svgEntityAttrs("water_return")} tabindex="0">
+              <text x="20" y="8" text-anchor="middle" class="inline-afterheat-value" style="font-size:9.5px;">${this._formatTemp("water_return")}</text>
+            </g>
+          ` : ""}
+          ${hasDelta ? `
+            <g ${this._svgEntityAttrs("water_delta")} tabindex="0">
+              <text x="0" y="-13" text-anchor="middle" class="inline-afterheat-delta">ΔT ${this._formatDeltaT("water_delta")}</text>
+            </g>
+          ` : ""}
+        ` : `
+          <g class="afterheat-coil-lines ${active ? "active" : ""}">
+            <line x1="-25" y1="-18" x2="-25" y2="5"></line><line x1="-14" y1="-18" x2="-14" y2="5"></line>
+            <line x1="-3" y1="-18" x2="-3" y2="5"></line><line x1="8" y1="-18" x2="8" y2="5"></line>
+            <line x1="19" y1="-18" x2="19" y2="5"></line><line x1="29" y1="-18" x2="29" y2="5"></line>
+          </g>
+        `}
+      </g>
+    `;
+  }
+
   _render() {
     if (!this.shadowRoot || !this._config) return;
     this._lastRenderSignature = this._renderSignature();
@@ -793,17 +1208,22 @@ class HRVCard extends HTMLElement {
     const supply = this._number("supply_temperature");
     const extract = this._number("extract_temperature");
     const exhaust = this._number("exhaust_temperature");
-    const heatRecovery = this._heatRecoveryValue();
-    const recoveryProgress = Number.isFinite(heatRecovery) ? Math.max(0, Math.min(100, heatRecovery)) : 0;
-    const coolingRecovery = this._isCoolingRecovery();
-    const flowDuration = this._flowDuration();
     const bypassOpen = this._isBypassOpen();
     const summerMode = this._isSummerMode();
-    const animationOff = this._config?.appearance?.animation === false;
-    const hasBadges = this._config.appearance.show_badges !== false;
+    const recoveryBypassed = bypassOpen || summerMode;
+    const heatRecovery = this._heatRecoveryValue();
+    const recoveryProgress = recoveryBypassed
+      ? 0
+      : Number.isFinite(heatRecovery) ? Math.max(0, Math.min(100, heatRecovery)) : 0;
+    const recoveryValueText = recoveryBypassed ? "0%" : this._formatHeatRecovery();
+    const coolingRecovery = this._isCoolingRecovery();
+    const flowDuration = this._flowDuration();
+    const animationOff = !this._pipeAnimationEnabled();
     const hasLabels = this._config.appearance.show_labels !== false;
     const hasTemps = this._config.appearance.show_temperatures !== false;
     const compact = this._config.appearance.compact === true;
+    const afterheatCoilOpacity = Math.max(0, Math.min(100, Number(this._config?.appearance?.afterheat_coil_opacity ?? 60))) / 100;
+    const houseX = 350;
 
     const gOutdoorSupply = `${this._id}-outdoor-supply`;
     const gExtractExhaust = `${this._id}-extract-exhaust`;
@@ -811,22 +1231,27 @@ class HRVCard extends HTMLElement {
     const gExtractExhaustBypass = `${this._id}-extract-exhaust-bypass`;
     const gFlowFade = `${this._id}-flow-fade`;
     const flowMask = `${this._id}-flow-mask`;
-    const statusCircleY = summerMode ? 228 : 254;
+    const statusCircleY = summerMode ? 256 : 286;
     const outdoorSupplyPath = summerMode
       ? ""
       : bypassOpen
-      ? "M34 100 H586"
-      : "M34 92 H172 C238 92 252 138 310 138 C368 138 382 184 448 184 H586";
+      ? "M34 120 H586"
+      : "M34 120 H172 C238 120 252 166 310 166 C368 166 382 212 448 212 H586";
     const extractExhaustPath = summerMode
       ? "M586 146 H34"
       : bypassOpen
-      ? "M586 184 H34"
-      : "M586 92 H448 C382 92 368 138 310 138 C252 138 238 184 172 184 H34";
+      ? "M586 208 H34"
+      : "M586 120 H448 C382 120 368 166 310 166 C252 166 238 212 172 212 H34";
     const rightTopKey = bypassOpen ? "supply_temperature" : "extract_temperature";
     const rightTopLabel = this._temperatureLabel(rightTopKey, bypassOpen ? "supply" : "extract");
     const rightBottomKey = bypassOpen ? "extract_temperature" : "supply_temperature";
     const rightBottomLabel = this._temperatureLabel(rightBottomKey, bypassOpen ? "extract" : "supply");
     const extractGradient = summerMode || bypassOpen ? gExtractExhaustBypass : gExtractExhaust;
+    const hideAfterheatOnBypass = this._config?.appearance?.hide_afterheat_on_bypass === true && bypassOpen;
+    const inlineAfterheat = hideAfterheatOnBypass ? "" : this._inlineAfterheatSvg(
+      468,
+      summerMode ? 146 : bypassOpen ? 120 : 212
+    );
     const supplyFlowMarkup = summerMode ? "" : `
               <path class="duct-bg" d="${outdoorSupplyPath}"></path>
               <path class="flow-glow" stroke="url(#${bypassOpen ? gOutdoorSupplyBypass : gOutdoorSupply})" d="${outdoorSupplyPath}"></path>
@@ -842,26 +1267,22 @@ class HRVCard extends HTMLElement {
               ${this._particles(extractExhaustPath, flowDuration, flowDuration === "0s")}
     `;
     const arrowsMarkup = summerMode ? `
-              <path d="M544 140 H521 V133 L506 146 L521 159 V152 H544 Z"></path>
-              <path d="M114 140 H91 V133 L76 146 L91 159 V152 H114 Z"></path>
+              <path d="M565 140 H542 V133 L527 146 L542 159 V152 H565 Z"></path>
+              <path d="M93 140 H70 V133 L55 146 L70 159 V152 H93 Z"></path>
     ` : `
-              <path d="${bypassOpen ? "M76 94 H99 V87 L114 100 L99 113 V106 H76 Z" : "M76 86 H99 V79 L114 92 L99 105 V98 H76 Z"}"></path>
-              <path d="${bypassOpen ? "M506 94 H529 V87 L544 100 L529 113 V106 H506 Z" : "M544 86 H521 V79 L506 92 L521 105 V98 H544 Z"}"></path>
-              <path d="${bypassOpen ? "M544 178 H521 V171 L506 184 L521 197 V190 H544 Z" : "M114 178 H91 V171 L76 184 L91 197 V190 H114 Z"}"></path>
-              <path d="${bypassOpen ? "M114 178 H91 V171 L76 184 L91 197 V190 H114 Z" : "M506 178 H529 V171 L544 184 L529 197 V190 H506 Z"}"></path>
+              <path d="M49 114 H72 V107 L87 120 L72 133 V126 H49 Z"></path>
+              <path d="${bypassOpen ? "M533 114 H556 V107 L571 120 L556 133 V126 H533 Z" : "M571 114 H548 V107 L533 120 L548 133 V126 H571 Z"}"></path>
+              <path d="${bypassOpen ? "M571 202 H548 V195 L533 208 L548 221 V214 H571 Z" : "M87 206 H64 V199 L49 212 L64 225 V218 H87 Z"}"></path>
+              <path d="${bypassOpen ? "M87 202 H64 V195 L49 208 L64 221 V214 H87 Z" : "M533 206 H556 V199 L571 212 L556 225 V218 H533 Z"}"></path>
     `;
-    const fan1RpmMarkup = this._entityId("fan1_rpm") ? `
-            <g ${this._svgEntityAttrs("fan1_rpm")} tabindex="0">
-              <rect x="118" y="${summerMode ? 105 : 35}" width="98" height="20" rx="8" fill="transparent"></rect>
-              <text x="167" y="${summerMode ? 118 : 48}" text-anchor="middle" class="rpm-inline">${this._formatRpm("fan1_rpm")}</text>
-            </g>
-    ` : "";
-    const fan2RpmMarkup = this._entityId("fan2_rpm") ? `
-            <g ${this._svgEntityAttrs("fan2_rpm")} tabindex="0">
-              <rect x="118" y="${summerMode ? 168 : 219}" width="98" height="20" rx="8" fill="transparent"></rect>
-              <text x="167" y="${summerMode ? 181 : 232}" text-anchor="middle" class="rpm-inline">${this._formatRpm("fan2_rpm")}</text>
-            </g>
-    ` : "";
+    const fan1RpmMarkup = this._fanBadgeSvg(
+      "fan1_rpm", 128,
+      summerMode ? 48 : 120
+    );
+    const fan2RpmMarkup = this._fanBadgeSvg(
+      "fan2_rpm", 128,
+      summerMode ? 146 : bypassOpen ? 208 : 212
+    );
     const temperatureMarkup = summerMode ? `
             <g ${this._svgEntityAttrs("exhaust_temperature")} tabindex="0">
               <rect x="18" y="42" width="118" height="62" rx="10" fill="transparent"></rect>
@@ -875,24 +1296,24 @@ class HRVCard extends HTMLElement {
             </g>
     ` : `
             <g ${this._svgEntityAttrs("outdoor_temperature")} tabindex="0">
-              <rect x="18" y="6" width="100" height="56" rx="10" fill="transparent"></rect>
-              ${hasLabels ? `<text x="68" y="26" text-anchor="middle" class="label">${this._temperatureLabel("outdoor_temperature", "outdoor")}</text>` : ""}
-              ${hasTemps ? `<text x="68" y="56" text-anchor="middle" class="temperature">${this._formatTemp("outdoor_temperature")}</text>` : ""}
+              <rect x="18" y="18" width="100" height="56" rx="10" fill="transparent"></rect>
+              ${hasLabels ? `<text x="68" y="38" text-anchor="middle" class="label">${this._temperatureLabel("outdoor_temperature", "outdoor")}</text>` : ""}
+              ${hasTemps ? `<text x="68" y="68" text-anchor="middle" class="temperature">${this._formatTemp("outdoor_temperature")}</text>` : ""}
             </g>
             <g ${this._svgEntityAttrs(rightTopKey)} tabindex="0">
-              <rect x="502" y="6" width="100" height="56" rx="10" fill="transparent"></rect>
-              ${hasLabels ? `<text x="552" y="26" text-anchor="middle" class="label">${rightTopLabel}</text>` : ""}
-              ${hasTemps ? `<text x="552" y="56" text-anchor="middle" class="temperature">${this._formatTemp(rightTopKey)}</text>` : ""}
+              <rect x="502" y="18" width="100" height="56" rx="10" fill="transparent"></rect>
+              ${hasLabels ? `<text x="552" y="38" text-anchor="middle" class="label">${rightTopLabel}</text>` : ""}
+              ${hasTemps ? `<text x="552" y="68" text-anchor="middle" class="temperature">${this._formatTemp(rightTopKey)}</text>` : ""}
             </g>
             <g ${this._svgEntityAttrs(rightBottomKey)} tabindex="0">
-              <rect x="502" y="214" width="100" height="52" rx="10" fill="transparent"></rect>
-              ${hasLabels ? `<text x="552" y="234" text-anchor="middle" class="label">${rightBottomLabel}</text>` : ""}
-              ${hasTemps ? `<text x="552" y="260" text-anchor="middle" class="temperature">${this._formatTemp(rightBottomKey)}</text>` : ""}
+              <rect x="502" y="260" width="100" height="52" rx="10" fill="transparent"></rect>
+              ${hasLabels ? `<text x="552" y="280" text-anchor="middle" class="label">${rightBottomLabel}</text>` : ""}
+              ${hasTemps ? `<text x="552" y="306" text-anchor="middle" class="temperature">${this._formatTemp(rightBottomKey)}</text>` : ""}
             </g>
             <g ${this._svgEntityAttrs("exhaust_temperature")} tabindex="0">
-              <rect x="18" y="214" width="100" height="52" rx="10" fill="transparent"></rect>
-              ${hasLabels ? `<text x="68" y="234" text-anchor="middle" class="label">${this._temperatureLabel("exhaust_temperature", "exhaust")}</text>` : ""}
-              ${hasTemps ? `<text x="68" y="260" text-anchor="middle" class="temperature">${this._formatTemp("exhaust_temperature")}</text>` : ""}
+              <rect x="18" y="260" width="100" height="52" rx="10" fill="transparent"></rect>
+              ${hasLabels ? `<text x="68" y="280" text-anchor="middle" class="label">${this._temperatureLabel("exhaust_temperature", "exhaust")}</text>` : ""}
+              ${hasTemps ? `<text x="68" y="306" text-anchor="middle" class="temperature">${this._formatTemp("exhaust_temperature")}</text>` : ""}
             </g>
     `;
 
@@ -927,8 +1348,9 @@ class HRVCard extends HTMLElement {
         svg {
           width: 100%;
           height: auto;
-          aspect-ratio: 620 / 292;
+          aspect-ratio: 620 / ${this._diagramHeight()};
           display: block;
+          overflow: visible;
           color: var(--hrv-text) !important;
         }
 
@@ -1037,18 +1459,37 @@ class HRVCard extends HTMLElement {
           fill: var(--hrv-text);
         }
 
-        .rpm-inline {
-          font-size: 11px;
-          font-style: italic;
-          font-weight: 500;
-          fill: var(--hrv-muted) !important;
-          color: var(--hrv-muted) !important;
+        .fan-icon {
+          transform-origin: 0px 0px;
+          animation-name: fan-spin;
+          animation-timing-function: linear;
+          animation-iteration-count: infinite;
+        }
+
+        @keyframes fan-spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
+        .fan-blade {
+          fill: var(--hrv-text);
+          paint-order: stroke;
+          stroke: color-mix(in srgb, var(--hrv-background) 85%, transparent);
+          stroke-width: 2.5px;
+          stroke-linejoin: round;
+        }
+
+        .fan-hub {
+          fill: var(--hrv-text);
+          paint-order: stroke;
+          stroke: color-mix(in srgb, var(--hrv-background) 85%, transparent);
+          stroke-width: 2px;
         }
 
         .recovery-circle {
-          fill: color-mix(in srgb, var(--hrv-background) 82%, transparent);
-          stroke: color-mix(in srgb, var(--hrv-text) 18%, transparent);
-          stroke-width: 1;
+          fill: color-mix(in srgb, var(--hrv-background) 88%, var(--hrv-text) 4%);
+          stroke: none;
+          filter: drop-shadow(0 3px 7px rgba(0, 0, 0, .3));
         }
 
         .recovery-ring-bg {
@@ -1068,6 +1509,45 @@ class HRVCard extends HTMLElement {
           stroke: color-mix(in srgb, var(--info-color, #4aa3ff) 82%, var(--hrv-text) 18%);
         }
 
+        .afterheat-ring-bg {
+          fill: none;
+          stroke: color-mix(in srgb, var(--hrv-text) 18%, transparent);
+          stroke-width: 3;
+        }
+
+        .afterheat-ring {
+          fill: none;
+          stroke: color-mix(in srgb, var(--warning-color, #f2994a) 82%, var(--hrv-text) 18%);
+          stroke-width: 3;
+          stroke-linecap: round;
+        }
+
+        .status-ring-bg {
+          fill: none;
+          stroke: color-mix(in srgb, var(--hrv-text) 18%, transparent);
+          stroke-width: 3;
+        }
+
+        .status-ring {
+          fill: none;
+          stroke: color-mix(in srgb, var(--success-color, #43e683) 82%, var(--hrv-text) 18%);
+          stroke-width: 3;
+          stroke-linecap: round;
+          transition: stroke .4s ease;
+        }
+
+        .status-ring.warn {
+          stroke: color-mix(in srgb, var(--warning-color, #f2994a) 82%, var(--hrv-text) 18%);
+        }
+
+        .status-ring.danger {
+          stroke: color-mix(in srgb, var(--error-color, #db4437) 82%, var(--hrv-text) 18%);
+        }
+
+        .status-ring.info {
+          stroke: color-mix(in srgb, var(--info-color, #4aa3ff) 82%, var(--hrv-text) 18%);
+        }
+
         .recovery-value {
           font-size: 17px;
           font-weight: 700;
@@ -1076,21 +1556,38 @@ class HRVCard extends HTMLElement {
         }
 
         .status-circle {
-          fill: color-mix(in srgb, var(--hrv-background) 82%, transparent);
-          stroke: color-mix(in srgb, var(--hrv-text) 18%, transparent);
-          stroke-width: 1;
+          fill: color-mix(in srgb, var(--hrv-background) 88%, var(--hrv-text) 4%);
+          stroke: none;
+          filter: drop-shadow(0 3px 7px rgba(0, 0, 0, .3));
+        }
+
+        .status-circle-rim {
+          fill: none;
+          stroke: color-mix(in srgb, var(--hrv-text) 24%, transparent);
+          stroke-width: 1.5;
+        }
+
+        .status-circle-rim-large {
+          stroke-width: 2;
+        }
+
+        .status-circle-gloss {
+          fill: white;
+          opacity: .1;
+          mix-blend-mode: overlay;
+          pointer-events: none;
         }
 
         .status-label {
-          font-size: 8px;
-          letter-spacing: 0;
+          font-size: 9.5px;
+          letter-spacing: .3px;
           text-transform: uppercase;
           fill: var(--hrv-muted) !important;
           color: var(--hrv-muted) !important;
         }
 
         .status-value {
-          font-size: 12px;
+          font-size: 15px;
           font-weight: 700;
           fill: var(--hrv-text) !important;
           color: var(--hrv-text) !important;
@@ -1111,6 +1608,83 @@ class HRVCard extends HTMLElement {
           stroke-width: 1;
         }
 
+        .afterheat-coil {
+          fill-opacity: ${afterheatCoilOpacity};
+          stroke: color-mix(in srgb, var(--hrv-text) 35%, transparent);
+          stroke-width: 1.5;
+          transition: stroke .4s ease;
+        }
+
+        .afterheat-coil.active {
+          fill-opacity: ${afterheatCoilOpacity};
+          stroke: color-mix(in srgb, var(--error-color, #db4437) 80%, var(--hrv-text) 20%);
+          stroke-width: 2.5;
+        }
+
+        .fan-badge-box {
+          fill: #808080;
+          fill-opacity: ${afterheatCoilOpacity};
+          stroke: color-mix(in srgb, var(--hrv-text) 35%, transparent);
+          stroke-width: 1.5;
+        }
+
+        .afterheat-warm-side {
+          fill: color-mix(in srgb, var(--error-color, #db4437) 45%, transparent);
+        }
+
+        .afterheat-cool-side {
+          fill: color-mix(in srgb, var(--info-color, #4aa3ff) 45%, transparent);
+        }
+
+        .afterheat-coil-glow {
+          fill: color-mix(in srgb, var(--error-color, #db4437) 35%, transparent);
+          opacity: 0;
+          transition: opacity .4s ease;
+        }
+
+        .afterheat-coil-glow.active {
+          opacity: .5;
+          animation: coil-pulse 2.4s ease-in-out infinite;
+        }
+
+        @keyframes coil-pulse {
+          0%, 100% { opacity: .26; }
+          50% { opacity: .6; }
+        }
+
+        .afterheat-coil-lines line {
+          stroke: color-mix(in srgb, var(--hrv-text) 35%, transparent);
+          stroke-width: 3;
+          stroke-linecap: round;
+          transition: stroke .4s ease;
+        }
+
+        .afterheat-coil-lines.active line {
+          stroke: color-mix(in srgb, var(--error-color, #db4437) 70%, white 30%);
+        }
+
+        .afterheat-coil.active + .afterheat-coil-lines line,
+        .afterheat-coil-glow.active ~ .afterheat-coil-lines line {
+          stroke: color-mix(in srgb, var(--warning-color, #f2994a) 65%, var(--hrv-text) 35%);
+        }
+
+        .inline-afterheat-value {
+          font-size: 12px;
+          font-weight: 750;
+          paint-order: stroke;
+          stroke: color-mix(in srgb, var(--hrv-background) 85%, transparent);
+          stroke-width: 3px;
+        }
+
+        .inline-afterheat-delta {
+          font-size: 10px;
+          font-weight: 700;
+          fill: #ffffff !important;
+          paint-order: stroke;
+          stroke: rgba(0, 0, 0, .55);
+          stroke-width: 3px;
+        }
+
         .alarm-mark {
           fill: #fff !important;
           color: #fff !important;
@@ -1125,19 +1699,19 @@ class HRVCard extends HTMLElement {
 
         .badges {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
-          gap: 6px;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
           flex: 0 0 auto;
-          margin-top: 6px;
+          margin-top: 10px;
         }
 
         .badge {
           appearance: none;
           border: 0;
-          border-radius: 8px;
+          border-radius: 10px;
           background: color-mix(in srgb, var(--hrv-background) 82%, transparent);
           color: var(--hrv-text) !important;
-          padding: 6px 8px;
+          padding: 8px 10px;
           text-align: center;
           min-width: 0;
           cursor: pointer;
@@ -1161,8 +1735,8 @@ class HRVCard extends HTMLElement {
         .badge span {
           display: block;
           color: var(--hrv-muted) !important;
-          font-size: 10px;
-          line-height: 1.2;
+          font-size: 12px;
+          line-height: 1.25;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -1170,8 +1744,9 @@ class HRVCard extends HTMLElement {
 
         .badge strong {
           display: block;
-          margin-top: 2px;
-          font-size: 12px;
+          margin-top: 4px;
+          font-size: 17px;
+          font-weight: 700;
           line-height: 1.2;
           color: var(--hrv-text) !important;
           white-space: nowrap;
@@ -1223,7 +1798,7 @@ class HRVCard extends HTMLElement {
 
       <ha-card>
         <div class="card ${animationOff ? "no-animation" : ""}">
-          <svg viewBox="0 0 620 292" role="img" aria-label="${this._t("airflow_diagram")}">
+          <svg viewBox="0 0 620 ${this._diagramHeight()}" role="img" aria-label="${this._t("airflow_diagram")}">
             <defs>
               ${this._gradient(gOutdoorSupply, outdoor, supply)}
               ${this._gradient(gExtractExhaust, exhaust, extract)}
@@ -1235,8 +1810,8 @@ class HRVCard extends HTMLElement {
                 <stop offset="96%" stop-color="white"></stop>
                 <stop offset="100%" stop-color="black"></stop>
               </linearGradient>
-              <mask id="${flowMask}" maskUnits="userSpaceOnUse" x="18" y="58" width="584" height="160">
-                <rect x="18" y="58" width="584" height="160" fill="url(#${gFlowFade})"></rect>
+              <mask id="${flowMask}" maskUnits="userSpaceOnUse" x="18" y="40" width="584" height="280">
+                <rect x="18" y="40" width="584" height="280" fill="url(#${gFlowFade})"></rect>
               </mask>
             </defs>
 
@@ -1252,28 +1827,28 @@ class HRVCard extends HTMLElement {
             ${fan1RpmMarkup}
             ${fan2RpmMarkup}
 
+            ${inlineAfterheat}
+
             ${temperatureMarkup}
 
-            ${bypassOpen || summerMode ? "" : `
-              <g ${this._svgEntityAttrs("heat_recovery")} tabindex="0" transform="translate(310 46)">
-                <circle class="recovery-circle" cx="0" cy="0" r="32"></circle>
-                <circle class="recovery-ring-bg" cx="0" cy="0" r="26"></circle>
-                <circle class="recovery-ring ${coolingRecovery ? "cooling" : ""}" cx="0" cy="0" r="26" pathLength="100" stroke-dasharray="${recoveryProgress} 100" transform="rotate(-90 0 0)"></circle>
-                <text x="0" y="6" text-anchor="middle" class="recovery-value">${this._formatHeatRecovery()}</text>
-              </g>
-            `}
+            <g ${this._svgEntityAttrs("heat_recovery")} tabindex="0" transform="translate(${houseX - 168} 46)">
+              <circle class="recovery-circle" cx="0" cy="0" r="32"></circle>
+              <ellipse class="status-circle-gloss" cx="-9" cy="-14" rx="16" ry="10"></ellipse>
+              <circle class="recovery-ring-bg" cx="0" cy="0" r="29"></circle>
+              <circle class="recovery-ring ${coolingRecovery ? "cooling" : ""}" cx="0" cy="0" r="29" pathLength="100" stroke-dasharray="${recoveryProgress} 100" transform="rotate(-90 0 0)"></circle>
+              <circle class="status-circle-rim" cx="0" cy="0" r="32"></circle>
+              <text x="0" y="-6" text-anchor="middle" class="status-label">${this._t("recovery_short")}</text>
+              <text x="0" y="13" text-anchor="middle" class="recovery-value" style="font-size:15px;">${recoveryValueText}</text>
+            </g>
 
-            ${this._auxStatusCircles(statusCircleY)}
+            ${this._statusCircle("co2", this._t("co2"), this._formatNumber("co2", 0), houseX - 88, 46, "", "air_quality", this._formatAirQuality(), true, this._airQualityRing())}
+            ${this._statusCircle("room_temperature", this._t("room"), this._formatTemp("room_temperature"), houseX, 46, "", "humidity", this._formatNumber("humidity", 0, "%"), true, this._overallStatusRing())}
+            ${hideAfterheatOnBypass ? "" : this._afterheatCircle(houseX + 80, 46)}
+
+            ${this._auxStatusCircles(houseX, statusCircleY)}
             ${this._alarmIndicator()}
           </svg>
 
-          ${hasBadges ? `
-            <div class="badges">
-              ${this._badge(this._t("mode"), this._formatSelectState("mode"), "mode")}
-              ${this._badge(this._t("level"), this._formatSelectState("level"), "level")}
-              ${this._badge(this._t("humidity"), this._formatNumber("humidity", 0, "%"), "humidity")}
-            </div>
-          ` : ""}
         </div>
       </ha-card>
     `;
@@ -1320,10 +1895,12 @@ class HRVCardEditor extends HTMLElement {
     const thresholds = this._config?.temperature_thresholds || {};
     return {
       outdoor_temperature: entities.outdoor_temperature,
+      room_temperature: entities.room_temperature,
       supply_temperature: entities.supply_temperature,
       extract_temperature: entities.extract_temperature,
       exhaust_temperature: entities.exhaust_temperature,
       label_outdoor_temperature: labels.outdoor_temperature,
+      label_room_temperature: labels.room_temperature,
       label_supply_temperature: labels.supply_temperature,
       label_extract_temperature: labels.extract_temperature,
       label_exhaust_temperature: labels.exhaust_temperature,
@@ -1337,12 +1914,25 @@ class HRVCardEditor extends HTMLElement {
       alarm: entities.alarm,
       fan1_rpm: entities.fan1_rpm,
       fan2_rpm: entities.fan2_rpm,
+      afterheat_after: entities.afterheat_after,
+      afterheat_valve: entities.afterheat_valve,
+      water_flow: entities.water_flow,
+      water_return: entities.water_return,
+      water_delta: entities.water_delta,
+      air_quality: entities.air_quality,
+      power: entities.power,
+      heat_transfer: entities.heat_transfer,
+      heat_transfer: entities.heat_transfer,
       animation: appearance.animation !== false,
+      fan_animation: (appearance.fan_animation ?? appearance.animation) !== false,
+      pipe_animation: (appearance.pipe_animation ?? appearance.animation) !== false,
       show_labels: appearance.show_labels !== false,
       show_badges: appearance.show_badges !== false,
       show_temperatures: appearance.show_temperatures !== false,
       invert_heat_recovery: appearance.invert_heat_recovery === true,
       compact: appearance.compact === true,
+      afterheat_coil_opacity: appearance.afterheat_coil_opacity ?? 60,
+      hide_afterheat_on_bypass: appearance.hide_afterheat_on_bypass === true,
       threshold_white: thresholds.white ?? -10,
       threshold_blue: thresholds.blue ?? 5,
       threshold_green: thresholds.green ?? 16,
@@ -1366,10 +1956,12 @@ class HRVCardEditor extends HTMLElement {
         optional_entities: "Optional entities",
         appearance: "Appearance",
         outdoor_temperature: "Outdoor temperature",
+        room_temperature: "Room temperature",
         supply_temperature: "Supply temperature",
         extract_temperature: "Extract temperature",
         exhaust_temperature: "Exhaust temperature",
         label_outdoor_temperature: "Outdoor label",
+        label_room_temperature: "Room label",
         label_supply_temperature: "Supply label",
         label_extract_temperature: "Extract label",
         label_exhaust_temperature: "Exhaust label",
@@ -1388,13 +1980,26 @@ class HRVCardEditor extends HTMLElement {
         bypass: "Bypass",
         mode: "Mode",
         level: "Level",
-        fan1_rpm: "Fan 1 RPM",
-        fan2_rpm: "Fan 2 RPM",
+        fan1_rpm: "Fan 1 speed",
+        fan2_rpm: "Fan 2 speed",
+        afterheat: "Afterheat coil",
+        afterheat_after: "Air after coil",
+        afterheat_valve: "Valve opening",
+        water_flow: "Water flow temperature",
+        water_return: "Water return temperature",
+        water_delta: "Water ΔT",
+        air_quality: "Air quality",
+        power: "Power consumption",
+        heat_transfer: "Water heat transfer",
         animation: "Animation",
+        fan_animation: "Fan animation",
+        pipe_animation: "Pipe animation",
         show_labels: "Show labels",
         show_badges: "Show badges",
         show_temperatures: "Show temperatures",
-        compact: "Compact"
+        compact: "Compact",
+        afterheat_coil_opacity: "Afterheat coil opacity",
+        hide_afterheat_on_bypass: "Hide afterheat when bypass is open"
       },
       da: {
         temperatures: "Temperaturer",
@@ -1403,10 +2008,12 @@ class HRVCardEditor extends HTMLElement {
         optional_entities: "Valgfri enheder",
         appearance: "Udseende",
         outdoor_temperature: "Udetemperatur",
+        room_temperature: "Hustemperatur",
         supply_temperature: "Indblæsningstemperatur",
         extract_temperature: "Udsugningstemperatur",
         exhaust_temperature: "Udblæsningstemperatur",
         label_outdoor_temperature: "Ude label",
+        label_room_temperature: "Hus label",
         label_supply_temperature: "Indblæsning label",
         label_extract_temperature: "Udsugning label",
         label_exhaust_temperature: "Udblæs label",
@@ -1425,13 +2032,26 @@ class HRVCardEditor extends HTMLElement {
         bypass: "Bypass",
         mode: "Drift",
         level: "Ventilationstrin",
-        fan1_rpm: "Ventilator 2 RPM",
-        fan2_rpm: "Ventilator 1 RPM",
+        fan1_rpm: "Ventilator 2 hastighed",
+        fan2_rpm: "Ventilator 1 hastighed",
+        afterheat: "Eftervarmeflade",
+        afterheat_after: "Luft efter varmefladen",
+        afterheat_valve: "Ventilåbning",
+        water_flow: "Fremløbstemperatur",
+        water_return: "Returtemperatur",
+        water_delta: "Vand ΔT",
+        air_quality: "Luftkvalitet",
+        power: "Strømforbrug",
+        heat_transfer: "Vandets varmeoverførsel",
         animation: "Animation",
+        fan_animation: "Blæser-animation",
+        pipe_animation: "Rør-animation",
         show_labels: "Vis labels",
         show_badges: "Vis badges",
         show_temperatures: "Vis temperaturer",
-        compact: "Kompakt"
+        compact: "Kompakt",
+        afterheat_coil_opacity: "Eftervarme-spolens gennemsigtighed",
+        hide_afterheat_on_bypass: "Skjul eftervarme når bypass er åben"
       }
     };
     return translations[this._language()]?.[key] || translations.en[key] || key;
@@ -1447,6 +2067,7 @@ class HRVCardEditor extends HTMLElement {
         icon: "mdi:thermometer",
         schema: [
           { name: "outdoor_temperature", selector: { entity: { domain: "sensor" } } },
+          { name: "room_temperature", selector: { entity: { domain: "sensor" } } },
           { name: "supply_temperature", selector: { entity: { domain: "sensor" } } },
           { name: "extract_temperature", selector: { entity: { domain: "sensor" } } },
           { name: "exhaust_temperature", selector: { entity: { domain: "sensor" } } }
@@ -1460,6 +2081,7 @@ class HRVCardEditor extends HTMLElement {
         icon: "mdi:label-outline",
         schema: [
           { name: "label_outdoor_temperature", selector: { text: {} } },
+          { name: "label_room_temperature", selector: { text: {} } },
           { name: "label_supply_temperature", selector: { text: {} } },
           { name: "label_extract_temperature", selector: { text: {} } },
           { name: "label_exhaust_temperature", selector: { text: {} } }
@@ -1496,7 +2118,24 @@ class HRVCardEditor extends HTMLElement {
           { name: "filter_days", selector: { entity: {} } },
           { name: "alarm", selector: { entity: { domain: ["sensor", "binary_sensor"] } } },
           { name: "fan1_rpm", selector: { entity: { domain: "sensor" } } },
-          { name: "fan2_rpm", selector: { entity: { domain: "sensor" } } }
+          { name: "fan2_rpm", selector: { entity: { domain: "sensor" } } },
+          { name: "air_quality", selector: { entity: { domain: "sensor" } } },
+          { name: "power", selector: { entity: { domain: "sensor" } } }
+        ]
+      },
+      {
+        type: "expandable",
+        name: "afterheat",
+        title: this._t("afterheat"),
+        flatten: true,
+        icon: "mdi:radiator",
+        schema: [
+          { name: "afterheat_after", selector: { entity: { domain: "sensor" } } },
+          { name: "afterheat_valve", selector: { entity: { domain: "sensor" } } },
+          { name: "water_flow", selector: { entity: { domain: "sensor" } } },
+          { name: "water_return", selector: { entity: { domain: "sensor" } } },
+          { name: "water_delta", selector: { entity: { domain: "sensor" } } },
+          { name: "heat_transfer", selector: { entity: { domain: "sensor" } } }
         ]
       },
       {
@@ -1506,12 +2145,15 @@ class HRVCardEditor extends HTMLElement {
         flatten: true,
         icon: "mdi:palette",
         schema: [
-          { name: "animation", selector: { boolean: {} } },
+          { name: "fan_animation", selector: { boolean: {} } },
+          { name: "pipe_animation", selector: { boolean: {} } },
           { name: "show_labels", selector: { boolean: {} } },
           { name: "show_badges", selector: { boolean: {} } },
           { name: "show_temperatures", selector: { boolean: {} } },
           { name: "invert_heat_recovery", selector: { boolean: {} } },
-          { name: "compact", selector: { boolean: {} } }
+          { name: "compact", selector: { boolean: {} } },
+          { name: "afterheat_coil_opacity", selector: { number: { min: 0, max: 100, step: 5, mode: "slider", unit_of_measurement: "%" } } },
+          { name: "hide_afterheat_on_bypass", selector: { boolean: {} } }
         ]
       }
     ];
@@ -1532,6 +2174,7 @@ class HRVCardEditor extends HTMLElement {
     next.entities = {
       ...(next.entities || {}),
       outdoor_temperature: value.outdoor_temperature || undefined,
+      room_temperature: value.room_temperature || undefined,
       supply_temperature: value.supply_temperature || undefined,
       extract_temperature: value.extract_temperature || undefined,
       exhaust_temperature: value.exhaust_temperature || undefined,
@@ -1544,11 +2187,20 @@ class HRVCardEditor extends HTMLElement {
       filter_days: value.filter_days || undefined,
       alarm: value.alarm || undefined,
       fan1_rpm: value.fan1_rpm || undefined,
-      fan2_rpm: value.fan2_rpm || undefined
+      fan2_rpm: value.fan2_rpm || undefined,
+      afterheat_after: value.afterheat_after || undefined,
+      afterheat_valve: value.afterheat_valve || undefined,
+      water_flow: value.water_flow || undefined,
+      water_return: value.water_return || undefined,
+      water_delta: value.water_delta || undefined,
+      air_quality: value.air_quality || undefined,
+      power: value.power || undefined,
+      heat_transfer: value.heat_transfer || undefined
     };
     next.labels = {
       ...(next.labels || {}),
       outdoor_temperature: value.label_outdoor_temperature?.trim() || undefined,
+      room_temperature: value.label_room_temperature?.trim() || undefined,
       supply_temperature: value.label_supply_temperature?.trim() || undefined,
       extract_temperature: value.label_extract_temperature?.trim() || undefined,
       exhaust_temperature: value.label_exhaust_temperature?.trim() || undefined
@@ -1564,12 +2216,15 @@ class HRVCardEditor extends HTMLElement {
     };
     next.appearance = {
       ...(next.appearance || {}),
-      animation: value.animation !== false,
+      fan_animation: value.fan_animation !== false,
+      pipe_animation: value.pipe_animation !== false,
       show_labels: value.show_labels !== false,
       show_badges: value.show_badges !== false,
       show_temperatures: value.show_temperatures !== false,
       invert_heat_recovery: value.invert_heat_recovery === true,
-      compact: value.compact === true
+      compact: value.compact === true,
+      afterheat_coil_opacity: Number.isFinite(Number(value.afterheat_coil_opacity)) ? Number(value.afterheat_coil_opacity) : 60,
+      hide_afterheat_on_bypass: value.hide_afterheat_on_bypass === true
     };
     Object.keys(next.entities).forEach((key) => {
       if (next.entities[key] === undefined) delete next.entities[key];
@@ -1606,7 +2261,7 @@ class HRVCardEditor extends HTMLElement {
     }
 
     const language = this._language();
-    const schemaCacheKey = `${language}:2.3.8`;
+    const schemaCacheKey = `${language}:2.41.0-symmetric-gap`;
     if (!this._schemaCache || this._schemaCacheKey !== schemaCacheKey) {
       this._schemaCache = this._schema();
       this._schemaCacheKey = schemaCacheKey;
@@ -1634,5 +2289,5 @@ window.customCards.push({
   preview: true
 });
 
-window.__HRV_CARD_VERSION__ = "2.3.8";
-console.info("%c HRV Card %c loaded v2.3.8 ", "color: white; background: #1976d2; font-weight: 700; padding: 2px 4px; border-radius: 3px 0 0 3px;", "color: white; background: #43a047; font-weight: 700; padding: 2px 4px; border-radius: 0 3px 3px 0;");
+window.__HRV_CARD_VERSION__ = "2.41.0-symmetric-gap";
+console.info("%c HRV Card %c loaded v2.12.1 ", "color: white; background: #1976d2; font-weight: 700; padding: 2px 4px; border-radius: 3px 0 0 3px;", "color: white; background: #43a047; font-weight: 700; padding: 2px 4px; border-radius: 0 3px 3px 0;");
