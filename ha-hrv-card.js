@@ -1076,27 +1076,31 @@ var HRVCard = class extends HTMLElement {
 		if (!this._entityId(entityKey)) return "";
 		const textClass = ["status-value", valueClass].filter(Boolean).join(" ");
 		const hasExtra = Boolean(extraKey && this._entityId(extraKey) && extraValue);
-		const r = large ? 40 : 32;
-		const ringR = large ? 37 : 29;
-		const circleClass = large ? "status-circle status-circle-large" : "status-circle";
+		const w = (large ? 40 : 32) * 2;
+		const half = w / 2;
+		const rx = large ? 16 : 13;
+		const ringW = w - 6;
+		const ringHalf = ringW / 2;
+		const ringRx = Math.max(rx - 3, 0);
+		const boxClass = large ? "status-circle status-circle-large" : "status-circle";
 		const rimClass = large ? "status-circle-rim status-circle-rim-large" : "status-circle-rim";
-		const glossCx = large ? -11 : -9;
-		const glossCy = large ? -17 : -14;
-		const glossRx = large ? 20 : 16;
-		const glossRy = large ? 12 : 10;
-		const labelY = large ? hasExtra ? -15 : -8 : hasExtra ? -11 : -6;
-		const valueY = large ? hasExtra ? 6 : 15 : hasExtra ? 7 : 13;
+		const glossCx = large ? -16 : -13;
+		const glossCy = large ? -22 : -18;
+		const glossRx = large ? 25 : 20;
+		const glossRy = large ? 13 : 11;
+		const labelY = large ? hasExtra ? -19 : -12 : hasExtra ? -15 : -10;
+		const valueY = large ? hasExtra ? 5 : 14 : hasExtra ? 6 : 12;
 		const valueFontSize = valueFontSizeOverride || (large ? "17px" : "15px");
-		const extraY = large ? 23 : 21;
+		const extraY = large ? 25 : 23;
 		return `
             <g ${this._svgEntityAttrs(entityKey)} tabindex="0" transform="translate(${x} ${y})">
-              <circle class="${circleClass}" cx="0" cy="0" r="${r}"></circle>
+              <rect class="${boxClass}" x="${-half}" y="${-half}" width="${w}" height="${w}" rx="${rx}"></rect>
               <ellipse class="status-circle-gloss" cx="${glossCx}" cy="${glossCy}" rx="${glossRx}" ry="${glossRy}"></ellipse>
               ${ring ? `
-                <circle class="status-ring-bg" cx="0" cy="0" r="${ringR}"></circle>
-                <circle class="status-ring ${ring.colorClass || ""}" cx="0" cy="0" r="${ringR}" pathLength="100" stroke-dasharray="${ring.progress} 100" transform="rotate(-90 0 0)"></circle>
+                <rect class="status-ring-bg" x="${-ringHalf}" y="${-ringHalf}" width="${ringW}" height="${ringW}" rx="${ringRx}" pathLength="100"></rect>
+                <rect class="status-ring ${ring.colorClass || ""}" x="${-ringHalf}" y="${-ringHalf}" width="${ringW}" height="${ringW}" rx="${ringRx}" pathLength="100" stroke-dasharray="${ring.progress} 100"></rect>
               ` : ""}
-              <circle class="${rimClass}" cx="0" cy="0" r="${r}"></circle>
+              <rect class="${rimClass}" x="${-half}" y="${-half}" width="${w}" height="${w}" rx="${rx}"></rect>
               <text x="0" y="${labelY}" text-anchor="middle" class="status-label">${this._escapeHtml(label)}</text>
               <text x="0" y="${valueY}" text-anchor="middle" class="${textClass}" style="font-size:${valueFontSize};">${this._escapeHtml(value)}</text>
               ${hasExtra ? `
@@ -1114,14 +1118,14 @@ var HRVCard = class extends HTMLElement {
 		const valveText = Number.isFinite(valve) ? this._formatNumber("afterheat_valve", 0, "%") : "0%";
 		return `
             <g tabindex="0" transform="translate(${x} ${y})">
-              <circle class="status-circle" cx="0" cy="0" r="32"></circle>
-              <ellipse class="status-circle-gloss" cx="-9" cy="-14" rx="16" ry="10"></ellipse>
-              <circle class="afterheat-ring-bg" cx="0" cy="0" r="29"></circle>
-              <circle class="afterheat-ring" cx="0" cy="0" r="29" pathLength="100" stroke-dasharray="${valveProgress} 100" transform="rotate(-90 0 0)"></circle>
-              <circle class="status-circle-rim" cx="0" cy="0" r="32"></circle>
-              <text x="0" y="-6" text-anchor="middle" class="status-label">${this._t("afterheat_short")}</text>
+              <rect class="status-circle" x="-32" y="-32" width="64" height="64" rx="13"></rect>
+              <ellipse class="status-circle-gloss" cx="-13" cy="-18" rx="20" ry="11"></ellipse>
+              <rect class="afterheat-ring-bg" x="-29" y="-29" width="58" height="58" rx="10" pathLength="100"></rect>
+              <rect class="afterheat-ring" x="-29" y="-29" width="58" height="58" rx="10" pathLength="100" stroke-dasharray="${valveProgress} 100"></rect>
+              <rect class="status-circle-rim" x="-32" y="-32" width="64" height="64" rx="13"></rect>
+              <text x="0" y="-10" text-anchor="middle" class="status-label">${this._t("afterheat_short")}</text>
               <g ${this._svgEntityAttrs("afterheat_valve")} tabindex="0">
-                <text x="0" y="13" text-anchor="middle" class="status-value">${valveText}</text>
+                <text x="0" y="12" text-anchor="middle" class="status-value">${valveText}</text>
               </g>
             </g>
     `;
@@ -1130,13 +1134,13 @@ var HRVCard = class extends HTMLElement {
 		const open = this._isBypassOpen();
 		return `
             <g ${this._svgEntityAttrs("bypass")} tabindex="0" transform="translate(${x} ${y})">
-              <circle class="status-circle status-circle-large" cx="0" cy="0" r="40"></circle>
-              <ellipse class="status-circle-gloss" cx="-11" cy="-17" rx="20" ry="12"></ellipse>
-              <circle class="status-ring-bg" cx="0" cy="0" r="37"></circle>
-              <circle class="status-ring ${open ? "info" : ""}" cx="0" cy="0" r="37" pathLength="100" stroke-dasharray="100 100" transform="rotate(-90 0 0)"></circle>
-              <circle class="status-circle-rim status-circle-rim-large" cx="0" cy="0" r="40"></circle>
-              <text x="0" y="-8" text-anchor="middle" class="status-label">${this._t("bypass")}</text>
-              <text x="0" y="15" text-anchor="middle" class="status-value" style="font-size:15px;">${this._formatBypassState()}</text>
+              <rect class="status-circle status-circle-large" x="-40" y="-40" width="80" height="80" rx="16"></rect>
+              <ellipse class="status-circle-gloss" cx="-16" cy="-22" rx="25" ry="13"></ellipse>
+              <rect class="status-ring-bg" x="-37" y="-37" width="74" height="74" rx="13" pathLength="100"></rect>
+              <rect class="status-ring ${open ? "info" : ""}" x="-37" y="-37" width="74" height="74" rx="13" pathLength="100" stroke-dasharray="100 100"></rect>
+              <rect class="status-circle-rim status-circle-rim-large" x="-40" y="-40" width="80" height="80" rx="16"></rect>
+              <text x="0" y="-12" text-anchor="middle" class="status-label">${this._t("bypass")}</text>
+              <text x="0" y="14" text-anchor="middle" class="status-value" style="font-size:15px;">${this._formatBypassState()}</text>
             </g>
     `;
 	}
@@ -1145,22 +1149,22 @@ var HRVCard = class extends HTMLElement {
 		const ring = this._levelRing();
 		return `
             <g tabindex="0" transform="translate(${x} ${y})">
-              <circle class="status-circle status-circle-large" cx="0" cy="0" r="40"></circle>
-              <ellipse class="status-circle-gloss" cx="-11" cy="-17" rx="20" ry="12"></ellipse>
+              <rect class="status-circle status-circle-large" x="-40" y="-40" width="80" height="80" rx="16"></rect>
+              <ellipse class="status-circle-gloss" cx="-16" cy="-22" rx="25" ry="13"></ellipse>
               ${ring ? `
-                <circle class="status-ring-bg" cx="0" cy="0" r="37"></circle>
-                <circle class="status-ring ${ring.colorClass}" cx="0" cy="0" r="37" pathLength="100" stroke-dasharray="${ring.progress} 100" transform="rotate(-90 0 0)"></circle>
+                <rect class="status-ring-bg" x="-37" y="-37" width="74" height="74" rx="13" pathLength="100"></rect>
+                <rect class="status-ring ${ring.colorClass}" x="-37" y="-37" width="74" height="74" rx="13" pathLength="100" stroke-dasharray="${ring.progress} 100"></rect>
               ` : ""}
-              <circle class="status-circle-rim status-circle-rim-large" cx="0" cy="0" r="40"></circle>
+              <rect class="status-circle-rim status-circle-rim-large" x="-40" y="-40" width="80" height="80" rx="16"></rect>
               ${this._entityId("mode") ? `
                 <g ${this._svgEntityAttrs("mode")} tabindex="0">
-                  <text x="0" y="-10" text-anchor="middle" class="status-label">${this._t("mode")}</text>
-                  <text x="0" y="6" text-anchor="middle" class="status-value" style="font-size:12px;">${this._formatSelectState("mode")}</text>
+                  <text x="0" y="-14" text-anchor="middle" class="status-label">${this._t("mode")}</text>
+                  <text x="0" y="5" text-anchor="middle" class="status-value" style="font-size:12px;">${this._formatSelectState("mode")}</text>
                 </g>
               ` : ""}
               ${this._entityId("level") ? `
                 <g ${this._svgEntityAttrs("level")} tabindex="0">
-                  <text x="0" y="23" text-anchor="middle" class="status-value" style="font-size:11px;">${this._formatSelectState("level")}</text>
+                  <text x="0" y="25" text-anchor="middle" class="status-value" style="font-size:11px;">${this._formatSelectState("level")}</text>
                 </g>
               ` : ""}
             </g>
@@ -1841,12 +1845,12 @@ var HRVCard = class extends HTMLElement {
             ${temperatureMarkup}
 
             <g ${this._svgEntityAttrs("heat_recovery")} tabindex="0" transform="translate(182 46)">
-              <circle class="recovery-circle" cx="0" cy="0" r="32"></circle>
-              <ellipse class="status-circle-gloss" cx="-9" cy="-14" rx="16" ry="10"></ellipse>
-              <circle class="recovery-ring-bg" cx="0" cy="0" r="29"></circle>
-              <circle class="recovery-ring ${coolingRecovery ? "cooling" : ""}" cx="0" cy="0" r="29" pathLength="100" stroke-dasharray="${recoveryProgress} 100" transform="rotate(-90 0 0)"></circle>
-              <circle class="status-circle-rim" cx="0" cy="0" r="32"></circle>
-              <text x="0" y="-6" text-anchor="middle" class="status-label">${this._t("recovery_short")}</text>
+              <rect class="recovery-circle" x="-32" y="-32" width="64" height="64" rx="13"></rect>
+              <ellipse class="status-circle-gloss" cx="-13" cy="-18" rx="20" ry="11"></ellipse>
+              <rect class="recovery-ring-bg" x="-29" y="-29" width="58" height="58" rx="10" pathLength="100"></rect>
+              <rect class="recovery-ring ${coolingRecovery ? "cooling" : ""}" x="-29" y="-29" width="58" height="58" rx="10" pathLength="100" stroke-dasharray="${recoveryProgress} 100"></rect>
+              <rect class="status-circle-rim" x="-32" y="-32" width="64" height="64" rx="13"></rect>
+              <text x="0" y="-10" text-anchor="middle" class="status-label">${this._t("recovery_short")}</text>
               <text x="0" y="13" text-anchor="middle" class="recovery-value" style="font-size:15px;">${recoveryValueText}</text>
             </g>
 
@@ -2427,7 +2431,7 @@ var HRVCardEditor = class extends HTMLElement {
 			form.computeLabel = (schema) => this._computeLabel(schema);
 			form.addEventListener("value-changed", (event) => this._valueChanged(event));
 		}
-		const schemaCacheKey = `${this._language()}:2.41.0-symmetric-gap`;
+		const schemaCacheKey = `${this._language()}:2.13.1-square-status-boxes`;
 		if (!this._schemaCache || this._schemaCacheKey !== schemaCacheKey) {
 			this._schemaCache = this._schema();
 			this._schemaCacheKey = schemaCacheKey;
@@ -2446,6 +2450,6 @@ window.customCards.push({
 	description: "Animated heat recovery ventilation card with temperature gradients",
 	preview: true
 });
-window.__HRV_CARD_VERSION__ = "2.41.0-symmetric-gap";
+window.__HRV_CARD_VERSION__ = "2.13.1-square-status-boxes";
 console.info("%c HRV Card %c loaded v2.12.1 ", "color: white; background: #1976d2; font-weight: 700; padding: 2px 4px; border-radius: 3px 0 0 3px;", "color: white; background: #43a047; font-weight: 700; padding: 2px 4px; border-radius: 0 3px 3px 0;");
 //#endregion
