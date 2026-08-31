@@ -1854,7 +1854,7 @@ class HRVCard extends HTMLElement {
 
             ${this._statusCircle("co2", this._t("co2"), this._formatNumber("co2", 0), houseX - 88, 46, "", "air_quality", this._formatAirQuality(), true, this._airQualityRing())}
             ${this._statusCircle("room_temperature", this._t("room"), this._formatTemp("room_temperature"), houseX, 46, "", "humidity", this._formatNumber("humidity", 0, "%"), true, this._overallStatusRing())}
-            ${hideAfterheatOnBypass ? "" : this._afterheatCircle(houseX + 80, 46)}
+            ${this._afterheatCircle(houseX + 80, 46)}
 
             ${this._auxStatusCircles(houseX, statusCircleY)}
             ${this._alarmIndicator()}
@@ -2010,7 +2010,7 @@ class HRVCardEditor extends HTMLElement {
         show_temperatures: "Show temperatures",
         compact: "Compact",
         afterheat_coil_opacity: "Afterheat coil opacity",
-        hide_afterheat_on_bypass: "Hide afterheat when bypass is open"
+        hide_afterheat_on_bypass: "Hide inline afterheat temperatures when bypass is open"
       },
       da: {
         temperatures: "Temperaturer",
@@ -2062,7 +2062,7 @@ class HRVCardEditor extends HTMLElement {
         show_temperatures: "Vis temperaturer",
         compact: "Kompakt",
         afterheat_coil_opacity: "Eftervarme-spolens gennemsigtighed",
-        hide_afterheat_on_bypass: "Skjul eftervarme når bypass er åben"
+        hide_afterheat_on_bypass: "Skjul varmefladens frem/retur/ΔT under bypass"
       }
     };
     return translations[this._language()]?.[key] || translations.en[key] || key;
@@ -2272,7 +2272,7 @@ class HRVCardEditor extends HTMLElement {
     }
 
     const language = this._language();
-    const schemaCacheKey = `${language}:2.13.1-square-status-boxes`;
+    const schemaCacheKey = `${language}:2.13.3-afterheat-bypass-layout`;
     if (!this._schemaCache || this._schemaCacheKey !== schemaCacheKey) {
       this._schemaCache = this._schema();
       this._schemaCacheKey = schemaCacheKey;
@@ -2300,5 +2300,5 @@ window.customCards.push({
   preview: true
 });
 
-window.__HRV_CARD_VERSION__ = "2.13.1-square-status-boxes";
+window.__HRV_CARD_VERSION__ = "2.13.3-afterheat-bypass-layout";
 console.info("%c HRV Card %c loaded v2.12.1 ", "color: white; background: #1976d2; font-weight: 700; padding: 2px 4px; border-radius: 3px 0 0 3px;", "color: white; background: #43a047; font-weight: 700; padding: 2px 4px; border-radius: 0 3px 3px 0;");

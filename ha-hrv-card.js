@@ -1271,8 +1271,7 @@ var HRVCard = class extends HTMLElement {
 		const rightBottomKey = bypassOpen ? "extract_temperature" : "supply_temperature";
 		const rightBottomLabel = this._temperatureLabel(rightBottomKey, bypassOpen ? "extract" : "supply");
 		const extractGradient = summerMode || bypassOpen ? gExtractExhaustBypass : gExtractExhaust;
-		const hideAfterheatOnBypass = this._config?.appearance?.hide_afterheat_on_bypass === true && bypassOpen;
-		const inlineAfterheat = hideAfterheatOnBypass ? "" : this._inlineAfterheatSvg(468, summerMode ? 146 : bypassOpen ? 120 : 212);
+		const inlineAfterheat = this._config?.appearance?.hide_afterheat_on_bypass === true && bypassOpen ? "" : this._inlineAfterheatSvg(468, summerMode ? 146 : bypassOpen ? 120 : 212);
 		const supplyFlowMarkup = summerMode ? "" : `
               <path class="duct-bg" d="${outdoorSupplyPath}"></path>
               <path class="flow-glow" stroke="url(#${bypassOpen ? gOutdoorSupplyBypass : gOutdoorSupply})" d="${outdoorSupplyPath}"></path>
@@ -1858,7 +1857,7 @@ var HRVCard = class extends HTMLElement {
 
             ${this._statusCircle("co2", this._t("co2"), this._formatNumber("co2", 0), 262, 46, "", "air_quality", this._formatAirQuality(), true, this._airQualityRing())}
             ${this._statusCircle("room_temperature", this._t("room"), this._formatTemp("room_temperature"), houseX, 46, "", "humidity", this._formatNumber("humidity", 0, "%"), true, this._overallStatusRing())}
-            ${hideAfterheatOnBypass ? "" : this._afterheatCircle(430, 46)}
+            ${this._afterheatCircle(430, 46)}
 
             ${this._auxStatusCircles(houseX, statusCircleY)}
             ${this._alarmIndicator()}
@@ -2006,7 +2005,7 @@ var HRVCardEditor = class extends HTMLElement {
 				show_temperatures: "Show temperatures",
 				compact: "Compact",
 				afterheat_coil_opacity: "Afterheat coil opacity",
-				hide_afterheat_on_bypass: "Hide afterheat when bypass is open"
+				hide_afterheat_on_bypass: "Hide inline afterheat temperatures when bypass is open"
 			},
 			da: {
 				temperatures: "Temperaturer",
@@ -2058,7 +2057,7 @@ var HRVCardEditor = class extends HTMLElement {
 				show_temperatures: "Vis temperaturer",
 				compact: "Kompakt",
 				afterheat_coil_opacity: "Eftervarme-spolens gennemsigtighed",
-				hide_afterheat_on_bypass: "Skjul eftervarme når bypass er åben"
+				hide_afterheat_on_bypass: "Skjul varmefladens frem/retur/ΔT under bypass"
 			}
 		};
 		return translations[this._language()]?.[key] || translations.en[key] || key;
@@ -2433,7 +2432,7 @@ var HRVCardEditor = class extends HTMLElement {
 			form.computeLabel = (schema) => this._computeLabel(schema);
 			form.addEventListener("value-changed", (event) => this._valueChanged(event));
 		}
-		const schemaCacheKey = `${this._language()}:2.13.1-square-status-boxes`;
+		const schemaCacheKey = `${this._language()}:2.13.3-afterheat-bypass-layout`;
 		if (!this._schemaCache || this._schemaCacheKey !== schemaCacheKey) {
 			this._schemaCache = this._schema();
 			this._schemaCacheKey = schemaCacheKey;
@@ -2452,6 +2451,6 @@ window.customCards.push({
 	description: "Animated heat recovery ventilation card with temperature gradients",
 	preview: true
 });
-window.__HRV_CARD_VERSION__ = "2.13.1-square-status-boxes";
+window.__HRV_CARD_VERSION__ = "2.13.3-afterheat-bypass-layout";
 console.info("%c HRV Card %c loaded v2.12.1 ", "color: white; background: #1976d2; font-weight: 700; padding: 2px 4px; border-radius: 3px 0 0 3px;", "color: white; background: #43a047; font-weight: 700; padding: 2px 4px; border-radius: 0 3px 3px 0;");
 //#endregion
