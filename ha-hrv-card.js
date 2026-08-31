@@ -1115,7 +1115,6 @@ var HRVCard = class extends HTMLElement {
     `;
 	}
 	_afterheatCircle(x, y = 46) {
-		if (!this._entityId("afterheat_active")) return "";
 		const active = this._isAfterheatActive();
 		const statusText = active ? this._t("afterheat_active") : this._t("afterheat_inactive");
 		return `
@@ -2432,7 +2431,7 @@ var HRVCardEditor = class extends HTMLElement {
 			form.computeLabel = (schema) => this._computeLabel(schema);
 			form.addEventListener("value-changed", (event) => this._valueChanged(event));
 		}
-		const schemaCacheKey = `${this._language()}:2.13.3-afterheat-bypass-layout`;
+		const schemaCacheKey = `${this._language()}:2.13.4-afterheat-status-layout`;
 		if (!this._schemaCache || this._schemaCacheKey !== schemaCacheKey) {
 			this._schemaCache = this._schema();
 			this._schemaCacheKey = schemaCacheKey;
@@ -2451,6 +2450,6 @@ window.customCards.push({
 	description: "Animated heat recovery ventilation card with temperature gradients",
 	preview: true
 });
-window.__HRV_CARD_VERSION__ = "2.13.3-afterheat-bypass-layout";
+window.__HRV_CARD_VERSION__ = "2.13.4-afterheat-status-layout";
 console.info("%c HRV Card %c loaded v2.12.1 ", "color: white; background: #1976d2; font-weight: 700; padding: 2px 4px; border-radius: 3px 0 0 3px;", "color: white; background: #43a047; font-weight: 700; padding: 2px 4px; border-radius: 0 3px 3px 0;");
 //#endregion
