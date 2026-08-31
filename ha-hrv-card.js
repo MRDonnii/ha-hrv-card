@@ -95,11 +95,7 @@ var HRVCard = class extends HTMLElement {
 					"afterheat_after",
 					"luft_efter"
 				], void 0),
-				afterheat_valve: findEntity([
-					"valve_opening",
-					"ventilaabning",
-					"afterheat_valve"
-				], void 0),
+				afterheat_active: findEntity(["eftervarme_aktiv", "afterheat_active"], void 0),
 				water_flow: findEntity([
 					"flow_temperature",
 					"fremloeb",
@@ -290,7 +286,7 @@ var HRVCard = class extends HTMLElement {
 			"filter_days",
 			"alarm",
 			"afterheat_after",
-			"afterheat_valve",
+			"afterheat_active",
 			"water_flow",
 			"water_return",
 			"water_delta",
@@ -590,8 +586,11 @@ var HRVCard = class extends HTMLElement {
 		return `${Math.abs(value).toFixed(1)}${this._unit(key, "°C")}`;
 	}
 	_isAfterheatActive() {
-		const valve = this._number("afterheat_valve");
-		if (Number.isFinite(valve) && valve > 0) return true;
+		const state = this._state("afterheat_active");
+		if (state !== void 0) {
+			const normalized = state.toString().trim().toLowerCase();
+			return normalized === "on" || normalized === "true" || normalized === "active" || normalized === "16";
+		}
 		const waterDelta = this._number("water_delta");
 		return Number.isFinite(waterDelta) && Math.abs(waterDelta) > .8;
 	}
@@ -715,6 +714,8 @@ var HRVCard = class extends HTMLElement {
 				state_closed: "Closed",
 				afterheat: "Afterheat",
 				afterheat_short: "Heat",
+				afterheat_active: "ON",
+				afterheat_inactive: "OFF",
 				recovery_short: "Exchanger",
 				afterheat_after: "After coil",
 				valve: "Valve",
@@ -771,6 +772,8 @@ var HRVCard = class extends HTMLElement {
 				state_closed: "Lukket",
 				afterheat: "Eftervarme",
 				afterheat_short: "Varme",
+				afterheat_active: "ON",
+				afterheat_inactive: "OFF",
 				recovery_short: "Veksler",
 				afterheat_after: "Luft efter",
 				valve: "Ventil",
@@ -1112,20 +1115,18 @@ var HRVCard = class extends HTMLElement {
     `;
 	}
 	_afterheatCircle(x, y = 46) {
-		if (!Boolean(this._entityId("afterheat_valve"))) return "";
-		const valve = this._number("afterheat_valve");
-		const valveProgress = Number.isFinite(valve) ? Math.max(0, Math.min(100, valve)) : 0;
-		const valveText = Number.isFinite(valve) ? this._formatNumber("afterheat_valve", 0, "%") : "0%";
+		if (!this._entityId("afterheat_active")) return "";
+		const active = this._isAfterheatActive();
+		const statusText = active ? this._t("afterheat_active") : this._t("afterheat_inactive");
 		return `
             <g tabindex="0" transform="translate(${x} ${y})">
               <rect class="status-circle" x="-32" y="-32" width="64" height="64" rx="13"></rect>
               <ellipse class="status-circle-gloss" cx="-13" cy="-18" rx="20" ry="11"></ellipse>
-              <rect class="afterheat-ring-bg" x="-29" y="-29" width="58" height="58" rx="10" pathLength="100"></rect>
-              <rect class="afterheat-ring" x="-29" y="-29" width="58" height="58" rx="10" pathLength="100" stroke-dasharray="${valveProgress} 100"></rect>
+              <rect class="afterheat-ring ${active ? "active" : "inactive"}" x="-29" y="-29" width="58" height="58" rx="10"></rect>
               <rect class="status-circle-rim" x="-32" y="-32" width="64" height="64" rx="13"></rect>
               <text x="0" y="-10" text-anchor="middle" class="status-label">${this._t("afterheat_short")}</text>
-              <g ${this._svgEntityAttrs("afterheat_valve")} tabindex="0">
-                <text x="0" y="12" text-anchor="middle" class="status-value">${valveText}</text>
+              <g ${this._svgEntityAttrs("afterheat_active")} tabindex="0">
+                <text x="0" y="12" text-anchor="middle" class="status-value">${statusText}</text>
               </g>
             </g>
     `;
@@ -1522,17 +1523,18 @@ var HRVCard = class extends HTMLElement {
           stroke: color-mix(in srgb, var(--info-color, #4aa3ff) 82%, var(--hrv-text) 18%);
         }
 
-        .afterheat-ring-bg {
-          fill: none;
-          stroke: color-mix(in srgb, var(--hrv-text) 18%, transparent);
-          stroke-width: 3;
-        }
-
         .afterheat-ring {
           fill: none;
-          stroke: color-mix(in srgb, var(--warning-color, #f2994a) 82%, var(--hrv-text) 18%);
           stroke-width: 3;
           stroke-linecap: round;
+        }
+
+        .afterheat-ring.active {
+          stroke: color-mix(in srgb, var(--warning-color, #f2994a) 82%, var(--hrv-text) 18%);
+        }
+
+        .afterheat-ring.inactive {
+          stroke: color-mix(in srgb, var(--hrv-text) 38%, transparent);
         }
 
         .status-ring-bg {
@@ -1923,7 +1925,7 @@ var HRVCardEditor = class extends HTMLElement {
 			fan1_rpm: entities.fan1_rpm,
 			fan2_rpm: entities.fan2_rpm,
 			afterheat_after: entities.afterheat_after,
-			afterheat_valve: entities.afterheat_valve,
+			afterheat_active: entities.afterheat_active,
 			water_flow: entities.water_flow,
 			water_return: entities.water_return,
 			water_delta: entities.water_delta,
@@ -1989,7 +1991,7 @@ var HRVCardEditor = class extends HTMLElement {
 				fan2_rpm: "Fan 2 speed",
 				afterheat: "Afterheat coil",
 				afterheat_after: "Air after coil",
-				afterheat_valve: "Valve opening",
+				afterheat_active: "Afterheat status",
 				water_flow: "Water flow temperature",
 				water_return: "Water return temperature",
 				water_delta: "Water ΔT",
@@ -2041,7 +2043,7 @@ var HRVCardEditor = class extends HTMLElement {
 				fan2_rpm: "Ventilator 1 hastighed",
 				afterheat: "Eftervarmeflade",
 				afterheat_after: "Luft efter varmefladen",
-				afterheat_valve: "Ventilåbning",
+				afterheat_active: "Eftervarme aktiv",
 				water_flow: "Fremløbstemperatur",
 				water_return: "Returtemperatur",
 				water_delta: "Vand ΔT",
@@ -2259,8 +2261,8 @@ var HRVCardEditor = class extends HTMLElement {
 						selector: { entity: { domain: "sensor" } }
 					},
 					{
-						name: "afterheat_valve",
-						selector: { entity: { domain: "sensor" } }
+						name: "afterheat_active",
+						selector: { entity: { domain: "binary_sensor" } }
 					},
 					{
 						name: "water_flow",
@@ -2362,7 +2364,7 @@ var HRVCardEditor = class extends HTMLElement {
 			fan1_rpm: value.fan1_rpm || void 0,
 			fan2_rpm: value.fan2_rpm || void 0,
 			afterheat_after: value.afterheat_after || void 0,
-			afterheat_valve: value.afterheat_valve || void 0,
+			afterheat_active: value.afterheat_active || void 0,
 			water_flow: value.water_flow || void 0,
 			water_return: value.water_return || void 0,
 			water_delta: value.water_delta || void 0,
