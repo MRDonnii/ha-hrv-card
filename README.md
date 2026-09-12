@@ -1,5 +1,12 @@
 # HRV Card
 
+## Neutral mobile preview
+
+![Neutral mobile preview of ha-hrv-card](docs/preview.png)
+
+> Rendered at 390 px mobile width with fictional Home Assistant entities and values. No private dashboard, person, address, camera, or sensor data is included.
+
+
 ![HRV Card preview](assets/hrv-card-preview.png)
 
 <p align="center">
